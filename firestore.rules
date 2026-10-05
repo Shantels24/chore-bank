@@ -1,0 +1,22 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Only the app (signed in) can read or write, and only inside a family
+    // whose code is long enough to be unguessable. Nobody can list families.
+    match /families/{familyId}/{collection}/{docId} {
+      function inFamily() {
+        return request.auth != null && familyId.size() >= 20;
+      }
+      allow read: if inFamily()
+        && collection in ['members', 'chores', 'logs', 'payouts', 'photos', 'settings'];
+      allow write: if inFamily()
+        && collection in ['members', 'chores', 'logs', 'payouts', 'settings'];
+      // Photos: keep each one under Firestore's size limit.
+      allow delete: if inFamily() && collection == 'photos';
+      allow create, update: if inFamily()
+        && collection == 'photos'
+        && request.resource.data.data is string
+        && request.resource.data.data.size() < 950000;
+    }
+  }
+}
