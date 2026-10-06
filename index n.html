@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Chore Bank</title>
+<meta name="description" content="Family chores, photo check-offs and monthly allowance">
+<meta name="theme-color" content="#1E3A64">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Chore Bank">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+<style>
+.tabs .in{grid-template-columns:repeat(4,1fr)}
+.meter{height:10px;border-radius:999px;background:var(--bg);border:1px solid var(--line);overflow:hidden}
+.meter i{display:block;height:100%;border-radius:999px;transition:width .3s}
+.ticks{display:flex;justify-content:space-between;font-size:.72rem;color:var(--muted);font-variant-numeric:tabular-nums;margin-top:2px}
+.ptsbig{font-family:var(--display);font-weight:800;font-size:2rem;line-height:1;font-variant-numeric:tabular-nums}
+.ptsbig small{font-size:.8rem;font-weight:600}
+.pill.pbad{background:var(--wait-soft);color:var(--bad)}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.tbl table{border-collapse:collapse;width:100%;min-width:440px;font-size:.88rem}
+.tbl th,.tbl td{border-bottom:1px solid var(--line);padding:8px;text-align:left;vertical-align:top}
+.tbl th{font-family:var(--display);font-weight:600;background:var(--bg)}
+.tbl tr:last-child td{border-bottom:0}
+.tbl .n{text-align:right;font-variant-numeric:tabular-nums}
+.rulepick{display:grid;gap:4px}
+.rulepick label{display:flex;justify-content:space-between;gap:10px;align-items:center;font-weight:400;padding:8px 10px;border:1px solid var(--line);border-radius:10px}
+.rulepick label input{width:auto;margin-right:6px}
+.rulepick label:has(input:checked){border-color:var(--btn);background:var(--bg)}
+@media (prefers-reduced-motion:reduce){.meter i{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="var(--star)" d="M12 2.5l2.9 6 6.6.8-4.9 4.5 1.3 6.5L12 17l-5.9 3.3 1.3-6.5L2.5 9.3l6.6-.8z"/></svg>
+      Chore Bank
+    </div>
+    <button class="me" id="meBtn" data-act="pickMe" aria-label="Choose who is using this phone"></button>
+  </header>
+  <main id="view"><div class="card empty"><p class="muted">Opening your family chart…</p></div></main>
+</div>
+<nav class="tabs" id="tabs" aria-label="Sections"><div class="in" role="tablist">
+  <button class="tab" role="tab" data-act="tab" data-tab="chores"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8l1.5 1.5L12 7M8 14l1.5 1.5L12 13M14 8h3M14 14h3"/></svg><span>Chores<span id="pendDot"></span></span></button>
+  <button class="tab" role="tab" data-act="tab" data-tab="money"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M7 15h3"/></svg><span>Allowance</span></button>
+  <button class="tab" role="tab" data-act="tab" data-tab="points"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg><span>Points</span></button>
+  <button class="tab" role="tab" data-act="tab" data-tab="family"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9.5" r="2.3"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5M14.5 15c2.6-.7 5.3.6 6 4"/></svg><span>Family</span></button>
+</div></nav>
+<dialog id="sheet"><div class="sheet" id="sheetBody"></div></dialog>
+
+<script type="module">
+import { FIREBASE_CONFIG, FAMILY_ID } from './config.js';
+import { SEED_MEMBERS, SEED_CHORES } from './seed.js';
+
+const SDK='https://www.gstatic.com/firebasejs/10.12.2/';
+const COLS=['members','chores','logs','payouts'];
+const S={members:[],chores:[],logs:[],payouts:[],points:[],nights:[],settings:{}};
+const ME_KEY='chorebank-me', TAB_KEY='chorebank-tab', PIN_OK='chorebank-pin-ok';
+let F=null, fs=null, mode='loading', tab=lsGet(TAB_KEY)||'chores', filter=null, view='today', monthOff=0, draft=null, seeding=false, formPhoto=undefined;
+const photoCache=new Map();
+const MCOL=['--m1','--m2','--m3','--m4','--m5','--m6'];
+const DAYN=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+const WEEK=[1,2,3,4,5,6,0];
+const FINAL=['No trash anywhere, big or tiny','Nothing left on the floor','Nothing in the wrong place','Corners and edges are clean','Everything that needed wiping is wiped'];
+
+function lsGet(k){try{return localStorage.getItem(k)}catch(e){return null}}
+function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+const $=s=>document.querySelector(s);
+const fmt=n=>(n<0?'−$':'$')+Math.abs(n).toFixed(2);
+const pad=n=>String(n).padStart(2,'0');
+const ymd=d=>d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
+const today=()=>ymd(new Date());
+function weekDates(){const d=new Date();d.setDate(d.getDate()-((d.getDay()+6)%7));return WEEK.map((w,i)=>{const x=new Date(d);x.setDate(d.getDate()+i);return {dow:w,date:ymd(x)}})}
+function monthKey(off){const d=new Date();d.setDate(1);d.setMonth(d.getMonth()+off);return d.getFullYear()+'-'+pad(d.getMonth()+1)}
+function monthLabel(k){const[y,m]=k.split('-');return new Date(+y,+m-1,1).toLocaleDateString(undefined,{month:'long',year:'numeric'})}
+const shortDate=d=>new Date(d+'T12:00').toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
+const member=id=>S.members.find(m=>m.id===id);
+const chore=id=>String(id).startsWith('duty-bath-')?dutyChore(String(id).slice(10)):S.chores.find(c=>c.id===id);
+const me=()=>member(lsGet(ME_KEY));
+const isAdult=()=>me()?.role==='adult';
+function avatar(m,size){const c=m?MCOL[(m.color??0)%MCOL.length]:'--muted';const s=size?`width:${size}px;height:${size}px;font-size:${size*.4}px;`:'';if(m&&m.photo)return `<span class="av" style="${s}background:var(--line);overflow:hidden"><img src="${esc(m.photo)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block"></span>`;return `<span class="av" style="${s}background:var(${c})">${esc((m?.name||'?').trim().charAt(0).toUpperCase())}</span>`}
+async function shrinkAvatar(file){const bmp=await createImageBitmap(file);const side=Math.min(bmp.width,bmp.height);const cv=document.createElement('canvas');cv.width=cv.height=256;cv.getContext('2d').drawImage(bmp,(bmp.width-side)/2,(bmp.height-side)/2,side,side,0,0,256,256);return cv.toDataURL('image/jpeg',.8)}
+function photoPicker(m){return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span id="avPrev">${avatar(Object.assign({},m,{photo:formPhoto===undefined?m.photo:formPhoto}),64)}</span><label class="btn sm ghost" for="mPhoto" style="position:relative">${m.photo||formPhoto?'Change photo':'Add a photo'}<input type="file" id="mPhoto" accept="image/*" style="position:absolute;opacity:0;width:1px;height:1px"></label><button type="button" class="link" data-act="rmPhoto">Remove photo</button></div>`}
+const starSvg=(cls='')=>`<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true"><path fill="var(--star)" stroke="var(--star-ink)" stroke-width="1" d="M12 2.5l2.9 6 6.6.8-4.9 4.5 1.3 6.5L12 17l-5.9 3.3 1.3-6.5L2.5 9.3l6.6-.8z"/></svg>`;
+async function hashPin(p){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(FAMILY_ID+':'+p));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+
+/* ---------- Firebase ---------- */
+const ref=(c,id)=>F.doc(fs,'families',FAMILY_ID,c,id);
+async function init(){
+  if(String(FIREBASE_CONFIG.apiKey).includes('PASTE')){mode='setup';render();return}
+  try{
+    const [{initializeApp},auth,store]=await Promise.all([import(SDK+'firebase-app.js'),import(SDK+'firebase-auth.js'),import(SDK+'firebase-firestore.js')]);
+    F=store; const app=initializeApp(FIREBASE_CONFIG);
+    try{fs=store.initializeFirestore(app,{localCache:store.persistentLocalCache({tabManager:store.persistentMultipleTabManager()})})}catch(e){fs=store.getFirestore(app)}
+    const a=auth.getAuth(app);
+    await new Promise((res,rej)=>{const off=auth.onAuthStateChanged(a,u=>{if(u){off();res()}});auth.signInAnonymously(a).catch(rej)});
+    mode='shared';
+    let first=0;
+    COLS.forEach(c=>F.onSnapshot(F.collection(fs,'families',FAMILY_ID,c),s=>{const all=s.docs.map(d=>Object.assign({id:d.id},d.data()));if(c==='logs')splitLogs(all);else S[c]=all;if(c==='members'||c==='chores'){first++;maybeSeed(first,s)}render()},err=>{console.error(err);toast(err.code==='permission-denied'?'The app isn’t allowed to read your data. Check the security rules (setup step 2).':'Lost the connection. It will catch up when you’re back online.')}));
+    F.onSnapshot(ref('settings','main'),s=>{S.settings=s.exists()?s.data():{};render()},()=>{});
+  }catch(e){console.error(e);mode='error';render()}
+}
+async function maybeSeed(first,snap){
+  if(seeding||first<2||snap.metadata.fromCache)return;
+  if(S.members.length||S.chores.length)return;
+  if(lsGet('chorebank-seeded'))return;
+  seeding=true;lsSet('chorebank-seeded','1');
+  try{const b=F.writeBatch(fs);SEED_MEMBERS.forEach(({id,...r})=>b.set(ref('members',id),r));SEED_CHORES.forEach(({id,...r})=>b.set(ref('chores',id),r));await b.commit()}catch(e){lsSet('chorebank-seeded','')}
+}
+function errMsg(e){
+  if(e&&e.code==='permission-denied')return 'Saving was blocked. Check the security rules (setup step 2).';
+  if(e&&e.code==='resource-exhausted')return 'Your free Firebase limit for today is used up. Try again tomorrow.';
+  return 'That didn’t save. Check your connection and try again.';
+}
+async function put(c,obj){const {id,...rest}=obj;try{await F.setDoc(ref(c,id),rest);return true}catch(e){toast(errMsg(e));return false}}
+async function del(c,id){try{await F.deleteDoc(ref(c,id))}catch(e){toast(errMsg(e))}}
+async function delLog(l){if(!l)return;for(const p of l.photos||[]){try{await F.deleteDoc(ref('photos',p))}catch(e){}}await del('logs',l.id)}
+async function loadPhoto(id){
+  if(photoCache.has(id))return photoCache.get(id);
+  try{const s=await F.getDoc(ref('photos',id));const d=s.exists()?s.data().data:'';photoCache.set(id,d);return d}catch(e){return ''}
+}
+function fillPhotos(){document.querySelectorAll('img[data-photo]').forEach(async img=>{if(img.src&&img.src.startsWith('data:'))return;const d=await loadPhoto(img.dataset.photo);if(d)img.src=d;else img.alt='Photo not found'})}
+
+/* ---------- logic ---------- */
+const jobsOn=dow=>S.chores.filter(c=>c.days&&c.days[dow]).map(c=>({c,who:c.days[dow]}));
+const logFor=(cid,date)=>S.logs.filter(l=>l.choreId===cid&&l.date===date).sort((a,b)=>(b.ts||0)-(a.ts||0))[0];
+function account(m,mk){
+  const L=S.logs.filter(l=>l.memberId===m.id&&String(l.date).startsWith(mk)&&!String(l.choreId).startsWith('duty-bath'));
+  const ok=L.filter(l=>l.status==='approved'),wait=L.filter(l=>l.status==='pending');
+  const earned=ok.reduce((a,l)=>a+(+l.value||0),0), pending=wait.reduce((a,l)=>a+(+l.value||0),0);
+  const P=S.payouts.filter(p=>p.memberId===m.id&&p.month===mk);
+  const paid=P.reduce((a,p)=>a+(+p.amount||0),0), base=+m.base||0;
+  return {L,ok,wait,earned,pending,P,paid,base,owed:base+earned-paid};
+}
+const pendingLogs=()=>S.logs.filter(l=>l.status==='pending').sort((a,b)=>(a.ts||0)-(b.ts||0));
+function sections(c){const out=[];(c.items||[]).forEach(it=>{let g=out[out.length-1];if(!g||g.s!==it.s){g={s:it.s,items:[]};out.push(g)}g.items.push(it.t)});return out}
+
+/* ---------- render ---------- */
+function render(){
+  const m=me();
+  $('#meBtn').hidden=mode!=='shared'; $('#tabs').hidden=mode!=='shared';
+  $('#meBtn').innerHTML = m ? `${avatar(m)}<span class="n">${esc(m.name)}</span>` : `<span class="av" style="background:var(--muted)">?</span><span class="n">Who’s here?</span>`;
+  document.querySelectorAll('.tab').forEach(b=>b.setAttribute('aria-selected',b.dataset.tab===tab));
+  const pc=pendingLogs().length;
+  $('#pendDot').innerHTML = isAdult()&&pc ? `<span class="dot">${pc}</span>` : '';
+  const v=$('#view');
+  if(mode==='setup'){v.innerHTML=`<div class="card setup"><h2>Almost ready</h2><p>This app needs your Firebase settings before it can save your family’s chores.</p><p>Open <b>config.js</b> and paste them in (step 3 of the setup guide).</p></div>`;return}
+  if(mode==='error'){v.innerHTML=`<div class="card empty"><p>Couldn’t connect. Check your internet connection, then close and reopen the app.</p><p class="muted" style="font-size:.85rem">If this keeps happening, check that Anonymous sign-in is turned on in Firebase (setup step 2).</p></div>`;return}
+  if(mode==='loading'){v.innerHTML=`<div class="card empty"><p class="muted">Opening your family chart…</p></div>`;return}
+  v.innerHTML = tab==='money'?renderMoney():tab==='family'?renderFamily():tab==='points'?renderPoints():renderChores();
+  fillPhotos();
+}
+function renderChores(){
+  if(!S.members.length) return `<h2>Today’s jobs</h2><div class="card empty">${starSvg('sticker')}<p>Loading your family…</p></div>`;
+  let h='';
+  if(!S.members.some(x=>x.role==='adult')) h+=`<div class="card" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:6px"><span>Add yourself as a Grown-up so you can see photos and approve jobs.</span><button class="btn sm" data-act="addAdult">Add me</button></div>`;
+  else if(!me()) h+=`<div class="card" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:6px"><span>Pick who’s using this phone.</span><button class="btn sm" data-act="pickMe">Choose</button></div>`;
+  const P=pendingLogs();
+  if(isAdult()&&P.length){
+    h+=`<h2>Check their work</h2><div class="list">`+P.map(l=>{const k=member(l.memberId);return `<div class="card acct"><div class="chore">${avatar(k)}<div class="info"><div class="t">${esc(l.title)}</div><div class="sub"><span>${esc(k?.name||'Someone')}</span><span>${shortDate(l.date)}</span><span class="val">${fmt(+l.value||0)}</span></div></div></div>
+    ${(l.photos||[]).length?`<div class="photos">${l.photos.map(p=>`<button data-act="photo" data-id="${esc(p)}" aria-label="View photo larger"><img data-photo="${esc(p)}" alt="Photo of finished ${esc(l.title)}"></button>`).join('')}</div>`:'<p class="muted" style="margin:0;font-size:.85rem">No photo was added.</p>'}
+    <div class="actions"><button class="btn sm ghost" data-act="redo" data-id="${l.id}">Send back</button><button class="btn sm ok" data-act="approve" data-id="${l.id}">Approve</button></div></div>`}).join('')+`</div>`;
+  }
+  if(filter===null) filter = me()&&me().role!=='adult' ? me().id : 'all';
+  h+=`<div style="display:flex;justify-content:space-between;align-items:end;gap:10px;flex-wrap:wrap"><h2 style="margin-bottom:0">${view==='week'?'This week':DAYN[new Date().getDay()]+'’s jobs'}</h2><div class="seg" role="group" aria-label="View"><button aria-pressed="${view==='today'}" data-act="view" data-id="today">Today</button><button aria-pressed="${view==='week'}" data-act="view" data-id="week">Week</button></div></div>`;
+  if(!S.chores.length) return h+`<div class="card empty" style="margin-top:12px"><p>No jobs yet. Add them in Family.</p></div>`;
+  if(view==='week') return h+renderWeek();
+  h+=`<div class="chips" role="group" aria-label="Show jobs for" style="margin-top:12px"><button class="chip" aria-pressed="${filter==='all'}" data-act="filter" data-id="all">Everyone</button>`+S.members.filter(x=>x.role!=='adult').map(x=>`<button class="chip" aria-pressed="${filter===x.id}" data-act="filter" data-id="${x.id}">${esc(x.name)}</button>`).join('')+`</div>`;
+  const dow=String(new Date().getDay()), t=today();
+  let js=jobsOn(dow).filter(j=>filter==='all'||j.who===filter);
+  kids().filter(x=>filter==='all'||filter===x.id).forEach(x=>{if(dutyToday(x.id)&&!js.some(j=>j.who===x.id&&/bathroom/i.test(j.c.title||'')))js.push({c:dutyChore(x.id),who:x.id})});
+  js.sort((a,b)=>(member(a.who)?.name||'').localeCompare(member(b.who)?.name||'')||(a.c.title||'').localeCompare(b.c.title||''));
+  if(!js.length) h+=`<div class="card empty" style="margin-top:8px"><p class="muted">No jobs for ${filter==='all'?'anyone':esc(member(filter)?.name||'this person')} today. Enjoy the day off!</p></div>`;
+  else h+=`<div class="list" style="margin-top:8px">`+js.map(j=>jobCard(j.c,j.who,t)).join('')+`</div>`;
+  return h;
+}
+function jobCard(c,who,date){
+  const l=logFor(c.id,date), k=member(who), secs=sections(c);
+  const peek=`<details class="peek"><summary>What this job includes</summary><ul>${secs.map(g=>`<li><b>${esc(g.s)}</b>: ${g.items.length} steps</li>`).join('')}</ul><button class="link" data-act="guide" data-id="${c.id}">See every step</button></details>`;
+  const head=`<div class="info"><div class="t">${esc(c.title)}</div><div class="sub"><span>${esc(k?.name||'Unassigned')}</span>${valTag(c)}</div>`;
+  if(l&&l.status!=='redo'){
+    const canUndo=isAdult()||(l.loggedBy===me()?.id&&l.status==='pending');
+    return `<div class="card chore">${starSvg('sticker')}${head}<div class="sub" style="margin-top:4px">${l.status==='pending'?'<span class="pill wait">Photo sent · waiting for OK</span>':'<span class="pill ok">Approved</span>'}</div></div>${canUndo?`<button class="link" data-act="undo" data-id="${l.id}">Undo</button>`:''}</div>`;
+  }
+  return `<div class="card chore">${head}${l&&l.status==='redo'?`<div class="redo">Sent back. Look it over and try again.</div>`:''}${peek}</div><button class="btn sm" data-act="start" data-id="${c.id}" data-who="${who}">Start</button></div>`;
+}
+function renderWeek(){
+  const kids=S.members.filter(x=>S.chores.some(c=>c.days&&Object.values(c.days).includes(x.id)));
+  const t=today();
+  let h=`<div class="card wk" style="margin-top:12px;padding:6px 8px"><table><thead><tr><th scope="col">Day</th>${kids.map(k=>`<th scope="col">${esc(k.name)}</th>`).join('')}</tr></thead><tbody>`;
+  weekDates().forEach(({dow,date})=>{
+    h+=`<tr class="${date===t?'today':''}"><th scope="row">${DAYN[dow].slice(0,3)}</th>`+kids.map(k=>{
+      const js=jobsOn(String(dow)).filter(j=>j.who===k.id);
+      return `<td>${js.map(j=>{const l=logFor(j.c.id,date);const cls=l&&l.status==='approved'?'ok':l&&l.status==='pending'?'wait':'';return `<span class="job ${cls}">${esc(j.c.short||j.c.title)}</span>`}).join('')||'<span class="muted">—</span>'}</td>`}).join('')+`</tr>`;
+  });
+  h+=`</tbody></table></div><p class="muted" style="font-size:.85rem">★ approved · ◔ waiting for a grown-up. Each kid gets the same number of jobs, and the jobs rotate so no one is stuck with the same one every day.</p>`;
+  h+=`<h3>What each job includes</h3><div class="list">`+[...S.chores].sort((a,b)=>(a.title||'').localeCompare(b.title||'')).map(c=>`<button class="card chore" style="text-align:left;cursor:pointer" data-act="guide" data-id="${c.id}"><div class="info"><div class="t">${esc(c.title)}</div><div class="sub">${sections(c).map(g=>`<span>${esc(g.s)}</span>`).join('')}</div></div><span class="muted">›</span></button>`).join('')+`</div>`;
+  return h;
+}
+function renderMoney(){
+  const mk=monthKey(monthOff);
+  let h=`<h2>Monthly allowance</h2><div class="monthnav"><button class="btn sm ghost" data-act="month" data-d="-1">‹ Prev</button><b>${monthLabel(mk)}</b><button class="btn sm ghost" data-act="month" data-d="1" ${monthOff>=0?'disabled style="opacity:.4"':''}>Next ›</button></div>`;
+  const list=[...S.members].sort((a,b)=>(a.role===b.role?0:a.role==='kid'?-1:1)||(a.name||'').localeCompare(b.name||''));
+  h+=`<div class="list" style="margin-top:12px">`+list.map(m=>{
+    const A=account(m,mk);
+    const hist=[...A.L.map(l=>({d:l.date,t:l.title+(l.status==='pending'?' (waiting)':l.status==='redo'?' (sent back)':''),v:l.status==='redo'?0:+l.value||0})),...A.P.map(p=>({d:p.date,t:'Paid'+(p.note?' · '+p.note:''),v:-(+p.amount||0)}))].sort((a,b)=>String(b.d).localeCompare(String(a.d)));
+    return `<div class="card acct"><div class="head">${avatar(m,40)}<div class="nm">${esc(m.name)}<div class="stars" aria-label="${A.ok.length} approved jobs">${A.ok.slice(0,40).map(()=>starSvg()).join('')}</div></div><div class="owed money">${fmt(A.owed)}<small>${A.owed>0?'still owed':A.owed<0?'paid ahead':'all paid'}</small></div></div>
+    <div class="ledger"><span>Monthly base</span><span class="r">${fmt(A.base)}</span><span>Jobs approved (${A.ok.length})</span><span class="r">+${fmt(A.earned)}</span>${A.pending?`<span class="muted">Waiting for OK (${A.wait.length})</span><span class="r muted">${fmt(A.pending)}</span>`:''}<span>Paid out</span><span class="r">−${fmt(A.paid)}</span></div>
+    ${hist.length?`<details><summary>See this month’s history</summary><ul>${hist.map(x=>`<li><span>${esc(String(x.d).slice(5).replace('-','/'))} · ${esc(x.t)}</span><span class="money">${x.v<0?fmt(x.v):'+'+fmt(x.v)}</span></li>`).join('')}</ul></details>`:''}
+    ${isAdult()?`<button class="btn sm ghost" data-act="pay" data-id="${m.id}" data-mk="${mk}">Record a payment</button>`:''}</div>`;
+  }).join('')+`</div>`;
+  if(!isAdult()) h+=`<p class="notice">Grown-ups record payments here when allowance is handed out.</p>`;
+  return h;
+}
+function renderFamily(){
+  const adult=isAdult();
+  let h=`<h2>Family</h2><div class="list">`+S.members.map(m=>`<div class="card chore">${avatar(m,40)}<div class="info"><div class="t">${esc(m.name)}</div><div class="sub"><span>${m.role==='adult'?'Grown-up · approves jobs':'Kid'}</span><span>${(+m.base||0)?fmt(+m.base)+' / month base':'No base allowance'}</span></div></div>${adult||!S.settings.pinHash?`<button class="btn sm ghost" data-act="editMember" data-id="${m.id}">Edit</button>`:m.id===me()?.id?`<button class="btn sm ghost" data-act="myPhoto" data-id="${m.id}">Photo</button>`:''}</div>`).join('')+`</div>`;
+  if(adult||!S.settings.pinHash) h+=`<div style="margin-top:10px"><button class="btn block" data-act="addMember">Add a family member</button></div>`;
+  h+=`<h2>Jobs and schedule</h2><div class="list">`+[...S.chores].sort((a,b)=>(a.title||'').localeCompare(b.title||'')).map(c=>{const ds=WEEK.filter(d=>c.days&&c.days[d]).map(d=>DAYN[d].slice(0,3)+' '+esc(member(c.days[d])?.name||'?'));return `<div class="card chore"><div class="info"><div class="t">${esc(c.title)}</div><div class="sub">${valTag(c)}<span>${(c.items||[]).length} steps</span></div><div class="sub">${ds.join(' · ')||'Not scheduled'}</div></div>${adult?`<button class="btn sm ghost" data-act="editChore" data-id="${c.id}">Edit</button>`:`<button class="btn sm ghost" data-act="guide" data-id="${c.id}">Steps</button>`}</div>`}).join('')+`</div>`;
+  if(adult){
+    h+=`<div style="margin-top:10px"><button class="btn block" data-act="addChore">Add a job</button></div>`;
+    h+=`<h2>Grown-up settings</h2><div class="list"><button class="btn ghost block" data-act="changePin">Change grown-up PIN</button><button class="btn ghost block" data-act="cleanPhotos">Delete photos older than 60 days</button></div><p class="muted" style="font-size:.85rem">Clearing old photos keeps you inside Firebase’s free storage. Job history and money totals stay.</p>`;
+  } else h+=`<p class="notice">Only grown-ups can change jobs and the schedule.</p>`;
+  return h;
+}
+
+/* ---------- sheets ---------- */
+const dlg=$('#sheet');
+function openSheet(html){$('#sheetBody').innerHTML=html;if(!dlg.open)dlg.showModal();dlg.scrollTop=0;fillPhotos()}
+function closeSheet(){dlg.close();draft=null}
+dlg.addEventListener('click',e=>{if(e.target===dlg)closeSheet()});
+dlg.addEventListener('close',()=>{draft=null});
+function checklistHtml(c,interactive){
+  return sections(c).map((g,gi)=>`<div class="check"><h4>${esc(g.s)}</h4>${g.items.map((t,i)=>interactive?`<label><input type="checkbox" id="ck-${gi}-${i}" class="ck">${esc(t)}</label>`:`<label style="cursor:default"><span aria-hidden="true">☐</span><span>${esc(t)}</span></label>`).join('')}</div>`).join('')
+   + (c.standard?`<div class="std">⚠ ${esc(c.standard)}</div>`:'');
+}
+const RULE=`<div class="rule"><b>The rule:</b> “It looks okay” is not the same as clean. Trash is trash, big or tiny. Dirt in a corner is still dirt. Do it right the first time.</div>`;
+function guideSheet(c){return `<h2>${esc(c.title)}</h2><p class="muted" style="margin:0">Every step for this job. When you’re finished, a photo of your work goes to a grown-up.</p>${checklistHtml(c,false)}${RULE}<button class="btn ghost" data-act="close">Close</button>`}
+function startSheet(c,who){
+  const k=member(who), adult=isAdult();
+  return `<h2>${esc(c.title)}</h2><p class="muted" style="margin:0">${esc(k?.name||'')} · ${DAYN[new Date().getDay()]} · ${valTag(c)}</p>
+  <p style="margin:0">Check off each step as you finish it.</p>${checklistHtml(c,true)}
+  <div class="check"><h4>Final check before you say “I’m finished”</h4>${FINAL.map((t,i)=>`<label><input type="checkbox" id="fk-${i}" class="ck">${esc(t)}</label>`).join('')}</div>${RULE}
+  <div><h4 style="font-family:var(--display);margin:4px 0 8px">Snapshot of your finished work${adult?' (optional for grown-ups)':''}</h4>
+  <label class="camera" for="ph">📷 Take or add photos<span class="muted" style="font-weight:400;font-size:.85rem">Show the whole area so it can be checked</span><input type="file" id="ph" accept="image/*" multiple></label>
+  <div class="photos" id="phPrev" style="margin-top:8px"></div></div>
+  <button class="btn block" id="submitJob" data-act="submit" disabled>Send for approval</button><p class="why" id="why"></p>
+  <button class="btn ghost" data-act="close">Not yet</button>`;
+}
+function refreshSubmit(){
+  if(!draft)return;
+  const left=[...dlg.querySelectorAll('.ck')].filter(x=>!x.checked).length;
+  const needPhoto=!isAdult()&&draft.files.length===0;
+  const b=$('#submitJob'), w=$('#why'); if(!b)return;
+  b.disabled=left>0||needPhoto||!!draft.busy;
+  b.textContent=isAdult()?'Mark done':'Send for approval';
+  w.textContent=draft.busy?draft.busy:left?`${left} step${left>1?'s':''} left to check off`:needPhoto?'Add at least one photo of your work':'Ready to send';
+}
+function pinFields(label,req=true){return `<label for="pin1">${label}<input id="pin1" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" ${req?'required':''} autocomplete="off"></label>`}
+function memberForm(m,role){
+  m=m||{role:role||'kid'};
+  const needPin=!S.settings.pinHash;
+  return `<h2>${m.id?'Edit '+esc(m.name):'Add a family member'}</h2><form id="fMember" data-id="${m.id||''}" class="sheet" style="padding:0">
+  <label for="mName">Name<input id="mName" name="name" required maxlength="40" value="${esc(m.name||'')}" autocomplete="off"></label>
+  <div><b style="font-size:.9rem">Profile picture</b><div style="margin-top:6px">${photoPicker(m)}</div></div>
+  <div class="row2"><label for="mRole">Role<select id="mRole" name="role"><option value="kid" ${m.role!=='adult'?'selected':''}>Kid</option><option value="adult" ${m.role==='adult'?'selected':''}>Grown-up</option></select></label>
+  <label for="mBase">Monthly base ($)<input id="mBase" name="base" type="number" inputmode="decimal" min="0" step="0.01" value="${m.base||''}" placeholder="0.00"></label></div>
+  <div id="pinWrap" ${needPin&&m.role==='adult'?'':'hidden'}>${pinFields('Grown-up PIN (4–8 digits)',needPin&&m.role==='adult')}<p class="muted" style="margin:4px 0 0;font-size:.85rem">Grown-ups enter this PIN to approve jobs, so kids can’t approve their own.</p></div>
+  <p class="muted" style="margin:0;font-size:.85rem">Base is a set amount each month on top of job earnings.</p>
+  <div class="actions">${m.id?`<button type="button" class="btn danger sm" data-act="rm" data-c="members" data-id="${m.id}">Remove</button>`:''}<div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Save</button></div></div></form>`;
+}
+function choreForm(c){
+  c=c||{days:{},items:[]};
+  const txt=sections(c).map(g=>'## '+g.s+'\n'+g.items.join('\n')).join('\n');
+  const opts=sel=>`<option value="">No one</option>`+S.members.map(m=>`<option value="${m.id}" ${sel===m.id?'selected':''}>${esc(m.name)}</option>`).join('');
+  return `<h2>${c.id?'Edit job':'Add a job'}</h2><form id="fChore" data-id="${c.id||''}" class="sheet" style="padding:0">
+  <label for="cTitle">Job name<input id="cTitle" name="title" required maxlength="60" value="${esc(c.title||'')}" autocomplete="off"></label>
+  <div class="row2"><label for="cShort">Short name (week chart)<input id="cShort" name="short" maxlength="16" value="${esc(c.short||'')}"></label>
+  <label for="cVal">Pays ($)<input id="cVal" name="value" type="number" inputmode="decimal" min="0" step="0.05" value="${c.value??''}"></label></div>
+  <fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:700;font-size:.9rem;margin-bottom:6px">Who does it each day</legend><div class="days">${WEEK.map(d=>`<label for="d${d}">${DAYN[d]}<select id="d${d}" name="d${d}">${opts(c.days&&c.days[d])}</select></label>`).join('')}</div></fieldset>
+  <label for="cItems">Steps (one per line; start a line with ## for a section)<textarea id="cItems" name="items">${esc(txt)}</textarea></label>
+  <label for="cStd">Standard (shown at the end)<input id="cStd" name="standard" maxlength="200" value="${esc(c.standard||'')}"></label>
+  <div class="actions">${c.id?`<button type="button" class="btn danger sm" data-act="rm" data-c="chores" data-id="${c.id}">Remove</button>`:''}<div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Save</button></div></div></form>`;
+}
+function payForm(m,mk){
+  const A=account(m,mk);
+  return `<h2>Pay ${esc(m.name)}</h2><form id="fPay" data-id="${m.id}" data-mk="${mk}" class="sheet" style="padding:0">
+  <p style="margin:0">${monthLabel(mk)}: <b class="money">${fmt(A.owed)}</b> still owed.</p>
+  <div class="row2"><label for="pAmt">Amount ($)<input id="pAmt" name="amount" type="number" inputmode="decimal" min="0.01" step="0.01" required value="${A.owed>0?A.owed.toFixed(2):''}"></label>
+  <label for="pNote">Note<input id="pNote" name="note" maxlength="40" placeholder="Cash, Venmo…" autocomplete="off"></label></div>
+  <div class="actions"><div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Record payment</button></div></div></form>`;
+}
+function pinSheet(id){return `<h2>Grown-up PIN</h2><form id="fPin" data-id="${id}" class="sheet" style="padding:0">${pinFields('Enter the PIN for '+esc(member(id)?.name||'this grown-up'))}<p class="why" id="pinErr"></p><div class="actions"><div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Continue</button></div></div></form>`}
+function newPinSheet(){return `<h2>Change grown-up PIN</h2><form id="fNewPin" class="sheet" style="padding:0">${pinFields('New PIN (4–8 digits)')}<div class="actions"><div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Save PIN</button></div></div></form>`}
+function photoSheet(m){return `<h2>Your profile picture</h2><form id="fPhoto" data-id="${m.id}" class="sheet" style="padding:0">${photoPicker(m)}<div class="actions"><div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Save</button></div></div></form>`}
+function whoSheet(){
+  return `<h2>Who’s using this phone?</h2><p class="muted" style="margin:0">Jobs finished on this phone count for this person.</p><div class="who">${S.members.map(m=>`<button data-act="setMe" data-id="${m.id}">${avatar(m)}<span><b>${esc(m.name)}</b><br><span class="muted" style="font-size:.85rem">${m.role==='adult'?'Grown-up':'Kid'}</span></span></button>`).join('')}</div>${S.members.some(m=>m.role==='adult')?'':'<button class="btn ghost" data-act="addAdult">I’m a grown-up, add me</button>'}`;
+}
+async function shrink(file){
+  const bmp=await createImageBitmap(file);
+  let max=1280,q=.7,out='';
+  for(let i=0;i<5;i++){
+    const sc=Math.min(1,max/Math.max(bmp.width,bmp.height));
+    const cv=document.createElement('canvas');cv.width=Math.round(bmp.width*sc);cv.height=Math.round(bmp.height*sc);
+    cv.getContext('2d').drawImage(bmp,0,0,cv.width,cv.height);
+    out=cv.toDataURL('image/jpeg',q);
+    if(out.length<700000)return out;
+    max=Math.round(max*.75);q=Math.max(.45,q-.08);
+  }
+  return out.length<900000?out:'';
+}
+
+/* ---------- events ---------- */
+document.addEventListener('change',e=>{
+  if(e.target.closest('#fPoints'))pointsPreview();
+  if(e.target.closest('#fNight'))nightPreview();
+  if(e.target.id==='mPhoto'&&e.target.files[0]){const f=e.target.files[0];e.target.value='';shrinkAvatar(f).then(d=>{formPhoto=d;const p=$('#avPrev');if(p)p.innerHTML=avatar({name:'',photo:d},64)}).catch(()=>toast('That picture couldn’t be used. Try another one.'))}
+  if(e.target.id==='mRole'){const w=$('#pinWrap');if(w){const show=e.target.value==='adult'&&!S.settings.pinHash;w.hidden=!show;const p=$('#pin1');if(p)p.required=show}}
+  if(e.target.id==='ph'&&draft){
+    draft.files.push(...[...e.target.files].slice(0,6-draft.files.length));
+    $('#phPrev').innerHTML=draft.files.map((f,i)=>`<button type="button" data-act="unphoto" data-i="${i}" aria-label="Remove photo"><img src="${URL.createObjectURL(f)}" alt="Photo ${i+1}"></button>`).join('')+(draft.files.length?'<span class="muted" style="font-size:.8rem;align-self:center">Tap a photo to remove it</span>':'');
+    e.target.value='';refreshSubmit();
+  } else if(e.target.classList.contains('ck')) refreshSubmit();
+});
+document.addEventListener('click',async e=>{
+  const b=e.target.closest('[data-act]'); if(!b)return;
+  const act=b.dataset.act, id=b.dataset.id;
+  if(await pointsClick(act,id,b))return;
+  if(act==='tab'){tab=b.dataset.tab;lsSet(TAB_KEY,tab);render();window.scrollTo(0,0)}
+  else if(act==='filter'){filter=id;render()}
+  else if(act==='view'){view=id;render()}
+  else if(act==='month'){monthOff=Math.min(0,monthOff+ +b.dataset.d);render()}
+  else if(act==='pickMe'){openSheet(whoSheet())}
+  else if(act==='setMe'){
+    const m=member(id);
+    if(m?.role==='adult'&&S.settings.pinHash&&lsGet(PIN_OK)!==S.settings.pinHash){openSheet(pinSheet(id));setTimeout(()=>$('#pin1')?.focus(),50);return}
+    if(m?.role!=='adult')lsSet(PIN_OK,''); // a kid on this phone must enter the PIN to switch back to a grown-up
+    lsSet(ME_KEY,id);filter=null;closeSheet();render();toast('Hi, '+(m?.name||'there')+'!')
+  }
+  else if(act==='rmPhoto'){formPhoto='';const p=$('#avPrev');if(p)p.innerHTML=avatar({name:$('#mName')?.value||member(dlg.querySelector('form')?.dataset.id)?.name||'?',color:member(dlg.querySelector('form')?.dataset.id)?.color},64)}
+  else if(act==='myPhoto'){formPhoto=undefined;openSheet(photoSheet(member(id)))}
+  else if(act==='addMember'){formPhoto=undefined;openSheet(memberForm())}
+  else if(act==='addAdult'){formPhoto=undefined;openSheet(memberForm(null,'adult'))}
+  else if(act==='editMember'){formPhoto=undefined;openSheet(memberForm(member(id)))}
+  else if(act==='addChore'){openSheet(choreForm())}
+  else if(act==='editChore'){openSheet(choreForm(chore(id)))}
+  else if(act==='guide'){e.preventDefault();openSheet(guideSheet(chore(id)))}
+  else if(act==='photo'){openSheet(`<img class="big" data-photo="${esc(id)}" alt="Photo of finished work"><button class="btn ghost" data-act="close">Close</button>`)}
+  else if(act==='pay'){openSheet(payForm(member(id),b.dataset.mk))}
+  else if(act==='changePin'){openSheet(newPinSheet())}
+  else if(act==='cleanPhotos'){
+    if(!b.dataset.armed){b.dataset.armed='1';b.textContent='Tap again to delete old photos';return}
+    const cut=Date.now()-60*864e5;let n=0;
+    for(const l of S.logs.filter(l=>(l.ts||0)<cut&&(l.photos||[]).length)){for(const p of l.photos){try{await F.deleteDoc(ref('photos',p));n++}catch(e){}}await put('logs',Object.assign({},l,{photos:[]}))}
+    b.removeAttribute('data-armed');b.textContent='Delete photos older than 60 days';toast(n?`Deleted ${n} old photo${n>1?'s':''}`:'No photos older than 60 days');
+  }
+  else if(act==='close'){closeSheet()}
+  else if(act==='rm'){
+    if(!b.dataset.armed){b.dataset.armed='1';b.textContent='Tap again to remove';return}
+    closeSheet(); await del(b.dataset.c,id);
+    if(b.dataset.c==='members'&&lsGet(ME_KEY)===id)lsSet(ME_KEY,'');
+    toast('Removed');
+  }
+  else if(act==='start'){
+    if(!me()){openSheet(whoSheet());return}
+    draft={choreId:id,who:b.dataset.who,files:[],busy:''};
+    openSheet(startSheet(chore(id),b.dataset.who)); refreshSubmit();
+  }
+  else if(act==='unphoto'&&draft){draft.files.splice(+b.dataset.i,1);$('#ph')?.dispatchEvent(new Event('change',{bubbles:true}))}
+  else if(act==='submit'&&draft){
+    const c=chore(draft.choreId), cur=me(); if(!c||!cur)return;
+    const logId=uid(), ids=[];
+    for(let i=0;i<draft.files.length;i++){
+      draft.busy=`Saving photo ${i+1} of ${draft.files.length}…`;refreshSubmit();
+      let data='';try{data=await shrink(draft.files[i])}catch(err){}
+      if(!data){draft.busy='';refreshSubmit();toast('That photo couldn’t be used. Try taking it again.');return}
+      const pid=uid();
+      if(!await put('photos',{id:pid,data,logId,ts:Date.now()})){draft.busy='';refreshSubmit();return}
+      photoCache.set(pid,data);ids.push(pid);
+    }
+    draft.busy='Sending…';refreshSubmit();
+    const adult=cur.role==='adult', who=draft.who;
+    closeSheet();
+    if(await put('logs',{id:logId,choreId:c.id,title:c.title,value:+c.value||0,memberId:who,loggedBy:cur.id,date:today(),ts:Date.now(),photos:ids,status:adult?'approved':'pending'}))
+      toast(adult?'Marked done.':'Great job! Your photo was sent for a grown-up to check.');
+  }
+  else if(act==='undo'){await delLog(S.logs.find(x=>x.id===id))}
+  else if(act==='approve'){const l=S.logs.find(x=>x.id===id);if(l&&isAdult()){await put('logs',Object.assign({},l,{status:'approved',approvedBy:me().id}));toast('Approved')}}
+  else if(act==='redo'){const l=S.logs.find(x=>x.id===id);if(l&&isAdult()){await put('logs',Object.assign({},l,{status:'redo',reviewedBy:me().id}));toast('Sent back to try again')}}
+});
+document.addEventListener('submit',async e=>{
+  e.preventDefault(); const f=e.target, d=Object.fromEntries(new FormData(f));
+  if(await pointsSubmit(f,d))return;
+  if(f.id==='fPhoto'){
+    const old=member(f.dataset.id);if(!old){closeSheet();return}
+    const photo=formPhoto===undefined?(old.photo||''):formPhoto;closeSheet();
+    if(await put('members',Object.assign({},old,{photo})))toast('Picture saved');
+    return;
+  }
+  if(f.id==='fMember'){
+    const old=member(f.dataset.id);
+    const m={id:f.dataset.id||uid(),name:d.name.trim(),role:d.role,base:Math.max(0,+d.base||0),color:old?old.color:S.members.length%MCOL.length,photo:formPhoto===undefined?(old?.photo||''):formPhoto,createdAt:old?.createdAt||Date.now()};
+    if(!m.name)return;
+    if(m.role==='adult'&&!S.settings.pinHash){if(!/^\d{4,8}$/.test(d.pin||''))return;const h=await hashPin(d.pin);await put('settings',{id:'main',pinHash:h});lsSet(PIN_OK,h)}
+    closeSheet();
+    if(await put('members',m)){ if(!me()||(m.role==='adult'&&!old))lsSet(ME_KEY,m.id); filter=null; toast(old?'Saved':'Added '+m.name) }
+  } else if(f.id==='fPin'){
+    const h=await hashPin(d.pin||'');
+    if(h!==S.settings.pinHash){$('#pinErr').textContent='That PIN doesn’t match. Try again.';$('#pin1').value='';return}
+    lsSet(PIN_OK,h);lsSet(ME_KEY,f.dataset.id);filter=null;closeSheet();render();toast('Hi, '+(member(f.dataset.id)?.name||'there')+'!');
+  } else if(f.id==='fNewPin'){
+    if(!/^\d{4,8}$/.test(d.pin||''))return;const h=await hashPin(d.pin);closeSheet();
+    if(await put('settings',{id:'main',pinHash:h})){lsSet(PIN_OK,h);toast('PIN changed')}
+  } else if(f.id==='fChore'){
+    const old=chore(f.dataset.id); const days={}; WEEK.forEach(w=>{if(d['d'+w])days[w]=d['d'+w]});
+    let s='Steps'; const items=[]; String(d.items||'').split('\n').map(x=>x.trim()).filter(Boolean).forEach(x=>{if(x.startsWith('##'))s=x.replace(/^#+\s*/,'')||'Steps';else items.push({s,t:x})});
+    const c={id:f.dataset.id||uid(),title:d.title.trim(),short:(d.short||'').trim(),value:Math.max(0,+d.value||0),days,items,standard:(d.standard||'').trim(),createdAt:old?.createdAt||Date.now()};
+    if(!c.title)return; closeSheet();
+    if(await put('chores',c)) toast(old?'Saved':'Job added');
+  } else if(f.id==='fPay'){
+    const amt=Math.round((+d.amount||0)*100)/100; if(amt<=0)return; closeSheet();
+    if(await put('payouts',{id:uid(),memberId:f.dataset.id,month:f.dataset.mk,amount:amt,note:(d.note||'').trim(),date:today(),ts:Date.now(),by:me()?.id||''})) toast('Payment recorded');
+  }
+});
+let tt; function toast(msg){let t=$('.toast');if(!t){t=document.createElement('div');t.className='toast';t.setAttribute('role','status');document.body.appendChild(t)}t.textContent=msg;t.hidden=false;clearTimeout(tt);tt=setTimeout(()=>t.hidden=true,2800)}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)render()});
+if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
+/* ---------- household points ---------- */
+const RULES=[
+ {g:'Behavior',items:[
+  {id:'talkback',t:'Talking back',p:2,fix:'Apologize respectfully, face to face.'},
+  {id:'space',t:'Not respecting someone’s space',p:2,fix:'Apologize and give them their space for the rest of the day.'},
+  {id:'belongings',t:'Taking or using someone’s things without asking',p:3,fix:'Return it in the same condition and apologize. Replace it if it was used up or broken.'},
+  {id:'listen',t:'Not doing what you were told',p:2,fix:'Do what was asked right away, without arguing.'},
+  {id:'homework',t:'Homework not done',p:3,fix:'Finish it before any free time and show a grown-up.'},
+  {id:'chores',t:'Assigned chore not done',p:2,fix:'Do the chore the same day (no pay for it).'},
+  {id:'honesty',t:'Being dishonest',p:4,noReduce:true},
+ ]},
+ {g:'House rules',items:[
+  {id:'cleanup',t:'Didn’t clean up after yourself',p:1,fix:'Clean it up right away.'},
+  {id:'flush',t:'Didn’t flush the toilet',p:1,noReduce:true,duty:true},
+  {id:'food',t:'Hiding food or taking food secretly',p:3,noReduce:true},
+  {id:'bedroomfood',t:'Eating in a bedroom',p:1,fix:'Clear the room of all food, crumbs, and wrappers.'},
+  {id:'lunch',t:'Lunch not made the night before school',p:1,fix:'Make it before leaving for school.'},
+  {id:'prep',t:'Clothes, backpack, homework, or supplies not ready the night before school',p:1,fix:'Get everything ready before leaving for school.'},
+  {id:'table',t:'Electronics at the kitchen table',p:2,fix:'Hand the device to a grown-up for the rest of the day.'},
+  {id:'bathroomtech',t:'Electronics in the bathroom (Alexa is OK)',p:2,fix:'Hand the device to a grown-up for the rest of the day.'},
+ ]},
+ {g:'Kazlyn’s bedtime',kaz:true,items:[
+  {id:'drink7',t:'Drinking after 7 p.m.',p:1,noReduce:true,noDouble:true},
+ ]},
+];
+const BT=[
+ {id:'bt-told',f:'told',step:'Tell a parent right away',t:'Bedtime: didn’t tell a parent right away about a wet bed',p:3,noReduce:true,noDouble:true},
+ {id:'bt-clean',f:'cleaned',step:'Clean up',t:'Bedtime: didn’t clean up after a wet bed',p:1,fix:'Finish the cleanup now.',noDouble:true},
+ {id:'bt-bath',f:'bathed',step:'Take a bath right away',t:'Bedtime: didn’t take a bath right away',p:1,fix:'Take the bath now.',noDouble:true},
+ {id:'bt-laundry',f:'laundry',step:'Put wet clothes and bedding in the laundry area',t:'Bedtime: wet clothes or bedding not put in the laundry area',p:1,fix:'Put them there now.',noDouble:true},
+];
+const RULE_BY_ID={};RULES.forEach(g=>g.items.forEach(r=>RULE_BY_ID[r.id]=r));BT.forEach(r=>RULE_BY_ID[r.id]=r);
+const LEVELS=[
+ {at:5,days:1,short:'No electronics',text:'No recreational electronics (games, YouTube, social media, TV). Schoolwork is OK.'},
+ {at:10,days:3,short:'No electronics + extra job',text:'No recreational electronics, plus one extra job a grown-up picks that’s tied to what happened.'},
+ {at:15,days:5,short:'No electronics, friends, or outings + extra job',text:'No recreational electronics, no friends over, outings, or sleepovers, plus one extra job tied to what happened.'},
+ {at:20,days:7,short:'No electronics, friends, or outings + plan talk',text:'No recreational electronics, no friends over, outings, or sleepovers, plus a sit-down with a grown-up to make a plan.'},
+];
+const addDays=(ds,n)=>{const d=new Date(ds+'T12:00');d.setDate(d.getDate()+n);return ymd(d)};
+const weekKey=ds=>{const d=new Date(ds+'T12:00');d.setDate(d.getDate()-((d.getDay()+6)%7));return ymd(d)};
+const isWeekday=ds=>{const g=new Date(ds+'T12:00').getDay();return g>0&&g<6};
+const nextWeekday=ds=>{let d=ds;do{d=addDays(d,1)}while(!isWeekday(d));return d};
+const addWeekdays=(ds,n)=>{let d=ds;while(n>0){d=addDays(d,1);if(isWeekday(d))n--}return d};
+const weekLabel=wk=>`${shortDate(wk)} – ${shortDate(addDays(wk,6))}`;
+const isKaz=m=>!!m&&(m.id==='m-kazlyn'||/^kazlyn/i.test(m.name||''));
+const kids=()=>S.members.filter(x=>x.role!=='adult');
+function splitLogs(all){S.logs=all.filter(x=>!x.kind);S.points=all.filter(x=>x.kind==='points');S.nights=all.filter(x=>x.kind==='night')}
+function computeWeek(mid,wk){
+  const es=S.points.filter(e=>e.memberId===mid&&weekKey(e.date)===wk).sort((a,b)=>String(a.date).localeCompare(String(b.date))||(a.ts||0)-(b.ts||0));
+  let total=0;const rows=[],hits=[];
+  es.forEach(e=>{const prev=total;total+=(+e.pts||0);const hit=[...LEVELS].reverse().find(L=>prev<L.at&&total>=L.at)||null;if(hit)hits.push({L:hit,date:e.date,end:addDays(e.date,hit.days)});rows.push({e,total,hit})});
+  return {rows,total,hits};
+}
+function activeCons(mid){
+  let best=null;
+  for(let k=0;k<4;k++){const r=computeWeek(mid,weekKey(addDays(today(),-7*k)));const h=r.hits[r.hits.length-1];if(h&&h.end>=today()&&(!best||h.L.at>best.L.at))best=h}
+  return best;
+}
+function dutyFor(mid){
+  const fs=S.points.filter(e=>e.memberId===mid&&e.ruleId==='flush').sort((a,b)=>String(a.date).localeCompare(String(b.date))||(a.ts||0)-(b.ts||0));
+  let start=null,end=null;
+  fs.forEach(e=>{if(!end||e.date>end){start=nextWeekday(e.date);end=addWeekdays(start,4)}else{end=addWeekdays(end,3)}});
+  return end&&end>=today()?{start,end}:null;
+}
+const dutyToday=mid=>{const d=dutyFor(mid);return !!d&&isWeekday(today())&&today()>=d.start&&today()<=d.end};
+function dutyChore(mid){const b=S.chores.find(c=>c.id==='c-bathroom')||S.chores.find(c=>/bathroom/i.test(c.title||''));return {id:'duty-bath-'+mid,title:'Bathroom duty',value:0,items:b?b.items:[],standard:b?.standard||''}}
+const valTag=c=>String(c.id).startsWith('duty-bath')?'<span class="pill wait">Unpaid · consequence</span>':`<span class="val">${fmt(+c.value||0)}</span>`;
+const planTalk=mid=>computeWeek(mid,weekKey(today())).total>=10&&computeWeek(mid,weekKey(addDays(today(),-7))).total>=10;
+const meterColor=t=>t>=15?'var(--bad)':t>=10?'var(--m5)':t>=5?'var(--wait)':'var(--ok)';
+const canSeeBedtime=k=>isKaz(k)&&(isAdult()||me()?.id===k.id);
+
+function renderPoints(){
+  const m=me(), wk=weekKey(today());
+  let h=`<h2>Points this week</h2><p class="muted" style="margin:-4px 0 12px">${weekLabel(wk)} · Points reset every Monday</p>`;
+  if(!m) return h+`<div class="card empty"><p>Pick who’s using this phone to see points.</p><button class="btn" data-act="pickMe">Choose</button></div>`;
+  const list=isAdult()?kids():(m.role==='adult'?[]:[m]);
+  h+=`<div class="list">`+list.map(k=>{
+    const r=computeWeek(k.id,wk), a=activeCons(k.id), d=dutyFor(k.id), next=LEVELS.find(L=>r.total<L.at);
+    const chips=[a?`<span class="pill pbad">${esc(a.L.short)} through ${shortDate(a.end)}</span>`:'',d?`<span class="pill wait">Bathroom duty ${d.start>today()?'starts '+shortDate(d.start)+', ':''}through ${shortDate(d.end)}</span>`:'',planTalk(k.id)?`<span class="pill pbad">10+ points two weeks in a row: plan talk</span>`:''].filter(Boolean).join('');
+    return `<div class="card acct"><div class="head">${avatar(k,40)}<div class="nm">${esc(k.name)}</div><div class="ptsbig" style="color:${meterColor(r.total)}">${r.total}<small> pts</small></div></div>
+    <div><div class="meter"><i style="width:${Math.min(r.total,20)/20*100}%;background:${meterColor(r.total)}"></i></div><div class="ticks"><span>0</span><span>5</span><span>10</span><span>15</span><span>20</span></div></div>
+    ${chips?`<div style="display:flex;flex-wrap:wrap;gap:6px">${chips}</div>`:''}
+    <p class="muted" style="margin:0;font-size:.88rem">${next?`${next.at-r.total} more point${next.at-r.total===1?'':'s'} reaches ${next.at}: ${esc(next.short.toLowerCase())} for ${next.days} day${next.days>1?'s':''}.`:'Highest level reached this week.'}</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${isAdult()?`<button class="btn sm" data-act="pAdd" data-id="${k.id}">Add points</button>`:''}<button class="btn sm ghost" data-act="pChart" data-id="${k.id}" data-off="0">Tracking chart</button>${canSeeBedtime(k)?`<button class="btn sm ghost" data-act="pNight" data-id="${k.id}">Bedtime routine</button>`:''}</div></div>`;
+  }).join('')+`</div>`;
+  if(!list.length) h+=`<div class="card empty"><p class="muted">No kids added yet.</p></div>`;
+  return h+`<div style="margin-top:12px"><button class="btn ghost block" data-act="pRules">How points work</button></div>`;
+}
+function chartSheet(mid,off){
+  const k=member(mid), wk=weekKey(addDays(today(),-7*off)), r=computeWeek(mid,wk);
+  let h=`<h2>${esc(k?.name||'')}’s tracking chart</h2><div class="monthnav" style="margin:0"><button class="btn sm ghost" data-act="pChart" data-id="${mid}" data-off="${off+1}">‹ Earlier</button><b style="font-size:1rem">${weekLabel(wk)}</b><button class="btn sm ghost" data-act="pChart" data-id="${mid}" data-off="${Math.max(0,off-1)}" ${off===0?'disabled style="opacity:.4"':''}>Later ›</button></div>`;
+  if(!r.rows.length) return h+`<div class="card empty"><p>No points this week. Nice work!</p></div><button class="btn ghost" data-act="close">Close</button>`;
+  h+=`<div class="tbl"><table><thead><tr><th>Date</th><th>Broken rule</th><th class="n">Points</th><th class="n">Total</th><th>Consequence</th></tr></thead><tbody>`+r.rows.map(({e,total,hit})=>{
+    const rule=RULE_BY_ID[e.ruleId]||{};const canRight=isAdult()&&!e.madeRight&&!rule.noReduce&&e.date===today()&&(+e.pts||0)>0;
+    const tags=[e.repeat?'<span class="pill wait">3rd+ time: double</span>':'',e.madeRight?`<span class="pill ok">Made it right (was ${e.origPts})</span>`:''].filter(Boolean).join(' ');
+    const cons=[hit?`${esc(hit.short)} for ${hit.days} day${hit.days>1?'s':''}, through ${shortDate(addDays(e.date,hit.days))}`:'',e.ruleId==='flush'?'Bathroom duty':''].filter(Boolean).join('<br>')||'<span class="muted">—</span>';
+    return `<tr><td style="white-space:nowrap">${esc(shortDate(e.date))}</td><td>${esc(e.rule)}${e.note?`<div class="muted" style="font-size:.8rem">${esc(e.note)}</div>`:''}${tags?`<div style="margin-top:4px">${tags}</div>`:''}${isAdult()?`<div>${canRight?`<button class="link" data-act="pRight" data-id="${e.id}">Made it right</button>`:''}<button class="link" data-act="pDel" data-id="${e.id}">Remove</button></div>`:''}</td><td class="n">${e.pts}</td><td class="n"><b>${total}</b></td><td>${cons}</td></tr>`;
+  }).join('')+`</tbody></table></div>`;
+  return h+`<button class="btn ghost" data-act="close">Close</button>`;
+}
+function rulesSheet(){
+  const showKaz=isAdult()||isKaz(me());
+  let h=`<h2>How points work</h2><p style="margin:0">Breaking a rule adds points. Points add up over the week (Monday to Sunday). Reaching 5, 10, 15, or 20 points starts a consequence.</p>`;
+  RULES.forEach(g=>{if(g.kaz&&!showKaz)return;h+=`<div class="tbl"><table><thead><tr><th>${esc(g.g)}</th><th class="n">Points</th><th>To make it right</th></tr></thead><tbody>`+g.items.map(r=>`<tr><td>${esc(r.t)}</td><td class="n"><b>${r.p}</b></td><td>${r.duty?'Bathroom duty (see below)':r.fix?esc(r.fix):'<span class="muted">Can’t be reduced</span>'}</td></tr>`).join('')+`</tbody></table></div>`});
+  h+=`<div class="tbl"><table><thead><tr><th class="n">Points</th><th>Consequence</th><th>How long</th></tr></thead><tbody>`+LEVELS.map(L=>`<tr><td class="n"><b>${L.at}</b></td><td>${esc(L.text)}</td><td style="white-space:nowrap">${L.days} day${L.days>1?'s':''}</td></tr>`).join('')+`</tbody></table></div>`;
+  h+=`<div class="check"><h4>Good to know</h4><ul style="margin:0;padding-left:18px;display:grid;gap:6px">
+  <li><b>Higher levels replace lower ones.</b> The new consequence starts the day you reach it. Consequences don’t stack.</li>
+  <li><b>Repeats count double.</b> Breaking the same rule a 3rd time in one week (and every time after) doubles its points.</li>
+  <li><b>Two rough weeks in a row:</b> 10 or more points two weeks in a row means a sit-down with a grown-up to make a plan.</li>
+  <li><b>Reset:</b> points go back to 0 every Monday. A consequence that’s already running keeps going until it ends.</li>
+  <li><b>Making it right:</b> if you fix it the same day, a grown-up can cut that rule’s points in half (rounded down, so 1 point becomes 0). This doesn’t apply to being dishonest, hiding food, not flushing, or late drinks.</li>
+  </ul></div>
+  <div class="check"><h4>Bathroom duty</h4><ul style="margin:0;padding-left:18px;display:grid;gap:6px">
+  <li>Not flushing means <b>1 week (5 school days)</b> of cleaning the bathroom, starting the next weekday.</li>
+  <li>Each extra time while bathroom duty is still running adds <b>3 more school days</b>.</li>
+  <li><b>No duty on Saturdays or Sundays.</b> It shows up as a job on the Chores tab, unpaid.</li></ul></div>`;
+  if(showKaz) h+=`<div class="check"><h4>Kazlyn’s bedtime routine</h4><p style="margin:0">A wet bed is never worth points. Points come only from not being honest or skipping a step. Tracked separately in Bedtime routine.</p></div>`;
+  return h+`<button class="btn ghost" data-act="close">Close</button>`;
+}
+function addPointsSheet(mid){
+  const ks=kids();
+  return `<h2>Add points</h2><form id="fPoints" class="sheet" style="padding:0">
+  <label for="pKid">Who<select id="pKid" name="kid" required>${ks.map(k=>`<option value="${k.id}" ${k.id===mid?'selected':''}>${esc(k.name)}</option>`).join('')}</select></label>
+  <div class="rulepick">${RULES.map(g=>`<div class="check" data-kazonly="${g.kaz?1:0}" ${g.kaz&&!isKaz(member(mid||ks[0]?.id))?'hidden':''}><h4>${esc(g.g)}</h4>${g.items.map(r=>`<label for="r-${r.id}"><span><input type="radio" id="r-${r.id}" name="rule" value="${r.id}" required> ${esc(r.t)}</span><b class="money">${r.p}</b></label>`).join('')}</div>`).join('')}</div>
+  <div class="row2"><label for="pDate">Date<input id="pDate" name="date" type="date" value="${today()}" max="${today()}" min="${weekKey(today())}"></label><label for="pNote">Note (optional)<input id="pNote" name="note" maxlength="80" autocomplete="off"></label></div>
+  <p class="why" id="pPrev"></p>
+  <div class="actions"><div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Add points</button></div></div></form>`;
+}
+function pointsPreview(){
+  const f=$('#fPoints');if(!f)return;const kid=f.kid.value,rid=(f.querySelector('input[name=rule]:checked')||{}).value,p=$('#pPrev');
+  f.querySelectorAll('[data-kazonly="1"]').forEach(x=>{x.hidden=!isKaz(member(kid))});
+  if(!rid){p.textContent='Pick the rule that was broken.';return}
+  const r=RULE_BY_ID[rid],wk=weekKey(f.date.value||today()),prior=S.points.filter(e=>e.memberId===kid&&e.ruleId===rid&&weekKey(e.date)===wk).length;
+  const dbl=prior>=2&&!r.noDouble,pts=r.p*(dbl?2:1),tot=computeWeek(kid,wk).total;
+  p.textContent=`${dbl?`This is time #${prior+1} this week, so it counts double. `:''}Adds ${pts} point${pts>1?'s':''}: ${tot} → ${tot+pts} this week.${rid==='flush'?' Also starts or extends bathroom duty.':''}`;
+}
+function nightSheet(mid){
+  const k=member(mid),ns=S.nights.filter(n=>n.memberId===mid).sort((a,b)=>String(b.date).localeCompare(String(a.date))||(b.ts||0)-(a.ts||0));
+  const recent=ns.slice(0,8),full=recent.filter(n=>BT.every(b=>n[b.f]));
+  let h=`<h2>${esc(k?.name||'')}’s bedtime routine</h2>
+  <p style="margin:0">Accidents happen. A wet bed is never worth points. Points only come from not being honest or skipping a step.</p>
+  <div class="check"><h4>Before bed</h4><label style="cursor:default"><span aria-hidden="true">☐</span><span>No drinks after 7 p.m.</span></label></div>
+  <div class="check"><h4>If the bed is wet</h4>${BT.map((b,i)=>`<label style="cursor:default"><b>${i+1}.</b><span>${esc(b.step)}${b.id==='bt-told'?' (be honest)':''}</span></label>`).join('')}</div>`;
+  if(recent.length) h+=`<div class="card"><b>Followed every step ${full.length} of the last ${recent.length} time${recent.length>1?'s':''}</b><div class="stars" style="margin-top:6px">${recent.slice().reverse().map(n=>BT.every(b=>n[b.f])?starSvg():`<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="var(--muted)" stroke-width="1.5" d="M12 2.5l2.9 6 6.6.8-4.9 4.5 1.3 6.5L12 17l-5.9 3.3 1.3-6.5L2.5 9.3l6.6-.8z"/></svg>`).join('')}</div></div>
+  <div class="list">${recent.map(n=>`<div class="card" style="padding:10px 12px"><div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(shortDate(n.date))}</b>${isAdult()?`<button class="link" data-act="nDel" data-id="${n.id}">Remove</button>`:''}</div><div class="sub" style="font-size:.85rem;display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:4px">${BT.map(b=>`<span style="color:${n[b.f]?'var(--ok)':'var(--bad)'}">${n[b.f]?'✓':'✗'} ${esc(b.step)}</span>`).join('')}</div></div>`).join('')}</div>`;
+  if(isAdult()) h+=`<button class="btn" data-act="pNightLog" data-id="${mid}">Log a wet night</button>`;
+  return h+`<button class="btn ghost" data-act="close">Close</button>`;
+}
+function nightForm(mid){
+  return `<h2>Log a wet night</h2><form id="fNight" data-id="${mid}" class="sheet" style="padding:0">
+  <label for="nDate">Date<input id="nDate" name="date" type="date" value="${today()}" max="${today()}"></label>
+  <div class="check"><h4>Check each step she did</h4>${BT.map(b=>`<label for="n-${b.f}"><input type="checkbox" id="n-${b.f}" name="${b.f}">${esc(b.step)}</label>`).join('')}</div>
+  <p class="why" id="nPrev"></p>
+  <div class="actions"><div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Save</button></div></div></form>`;
+}
+function nightPreview(){const f=$('#fNight');if(!f)return;const miss=BT.filter(b=>!f[b.f].checked),pts=miss.reduce((a,b)=>a+b.p,0);$('#nPrev').textContent=pts?`Missed steps add ${pts} point${pts>1?'s':''}.`:'Every step followed. No points, and she earns a star.'}
+async function pointsClick(act,id,b){
+  if(act==='pAdd'){openSheet(addPointsSheet(id));pointsPreview();return true}
+  if(act==='pChart'){openSheet(chartSheet(id,+b.dataset.off||0));return true}
+  if(act==='pRules'){openSheet(rulesSheet());return true}
+  if(act==='pNight'){openSheet(nightSheet(id));return true}
+  if(act==='pNightLog'){openSheet(nightForm(id));nightPreview();return true}
+  if(act==='pRight'){const e=S.points.find(x=>x.id===id);if(e&&isAdult()){const mid=e.memberId;await put('logs',Object.assign({},e,{pts:Math.floor((+e.pts||0)/2),origPts:e.pts,madeRight:true}));toast('Points cut in half');setTimeout(()=>openSheet(chartSheet(mid,0)),150)}return true}
+  if(act==='pDel'||act==='nDel'){
+    if(!b.dataset.armed){b.dataset.armed='1';b.textContent='Tap again to remove';return true}
+    if(act==='pDel'){const e=S.points.find(x=>x.id===id);await del('logs',id);toast('Removed');if(e)setTimeout(()=>openSheet(chartSheet(e.memberId,0)),150)}
+    else{const n=S.nights.find(x=>x.id===id);for(const e of S.points.filter(x=>x.nightId===id))await del('logs',e.id);await del('logs',id);toast('Removed');if(n)setTimeout(()=>openSheet(nightSheet(n.memberId)),150)}
+    return true;
+  }
+  return false;
+}
+async function pointsSubmit(f,d){
+  if(f.id==='fPoints'){
+    const r=RULE_BY_ID[d.rule],kid=d.kid;if(!r||!kid)return true;
+    const date=d.date&&d.date<=today()?d.date:today(),wk=weekKey(date);
+    const prior=S.points.filter(e=>e.memberId===kid&&e.ruleId===r.id&&weekKey(e.date)===wk).length,dbl=prior>=2&&!r.noDouble,pts=r.p*(dbl?2:1);
+    const before=computeWeek(kid,wk).total,hit=[...LEVELS].reverse().find(L=>before<L.at&&before+pts>=L.at);
+    closeSheet();
+    if(await put('logs',{id:uid(),kind:'points',memberId:kid,ruleId:r.id,rule:r.t,base:r.p,pts,repeat:dbl,note:(d.note||'').trim(),date,ts:Date.now(),by:me()?.id||''}))
+      toast(hit?`${member(kid)?.name} reached ${hit.at} points: ${hit.short.toLowerCase()} for ${hit.days} day${hit.days>1?'s':''}.`:r.id==='flush'?'Points added. Bathroom duty updated.':`Added ${pts} point${pts>1?'s':''}.`);
+    return true;
+  }
+  if(f.id==='fNight'){
+    const mid=f.dataset.id,date=d.date&&d.date<=today()?d.date:today(),nid=uid(),rec={id:nid,kind:'night',memberId:mid,date,ts:Date.now(),by:me()?.id||''};
+    BT.forEach(b=>rec[b.f]=!!d[b.f]);closeSheet();
+    if(!await put('logs',rec))return true;
+    for(const b of BT.filter(b=>!rec[b.f]))await put('logs',{id:uid(),kind:'points',memberId:mid,ruleId:b.id,rule:b.t,base:b.p,pts:b.p,nightId:nid,date,ts:Date.now(),by:me()?.id||''});
+    toast(BT.every(b=>rec[b.f])?'Saved. Every step followed!':'Saved.');
+    setTimeout(()=>openSheet(nightSheet(mid)),200);
+    return true;
+  }
+  return false;
+}
+
+init();
+</script>
+</body>
+</html>
