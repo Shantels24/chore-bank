@@ -8,5 +8,3 @@ export const FIREBASE_CONFIG = {
 };
 
 export const FAMILY_ID = "family-r0sjToIxyLsausSLTjWNKV";
-
-export const FAMILY_ID = "family-r0sjToIxyLsausSLTjWNKV";
