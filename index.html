@@ -43,7 +43,7 @@ const SDK='https://www.gstatic.com/firebasejs/10.12.2/';
 const COLS=['members','chores','logs','payouts'];
 const S={members:[],chores:[],logs:[],payouts:[],settings:{}};
 const ME_KEY='chorebank-me', TAB_KEY='chorebank-tab', PIN_OK='chorebank-pin-ok';
-let F=null, fs=null, mode='loading', tab=lsGet(TAB_KEY)||'chores', filter=null, view='today', monthOff=0, draft=null, seeding=false;
+let F=null, fs=null, mode='loading', tab=lsGet(TAB_KEY)||'chores', filter=null, view='today', monthOff=0, draft=null, seeding=false, formPhoto=undefined;
 const photoCache=new Map();
 const MCOL=['--m1','--m2','--m3','--m4','--m5','--m6'];
 const DAYN=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -67,7 +67,9 @@ const member=id=>S.members.find(m=>m.id===id);
 const chore=id=>S.chores.find(c=>c.id===id);
 const me=()=>member(lsGet(ME_KEY));
 const isAdult=()=>me()?.role==='adult';
-function avatar(m,size){const c=m?MCOL[(m.color??0)%MCOL.length]:'--muted';const s=size?`width:${size}px;height:${size}px;font-size:${size*.4}px;`:'';return `<span class="av" style="${s}background:var(${c})">${esc((m?.name||'?').trim().charAt(0).toUpperCase())}</span>`}
+function avatar(m,size){const c=m?MCOL[(m.color??0)%MCOL.length]:'--muted';const s=size?`width:${size}px;height:${size}px;font-size:${size*.4}px;`:'';if(m&&m.photo)return `<span class="av" style="${s}background:var(--line);overflow:hidden"><img src="${esc(m.photo)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block"></span>`;return `<span class="av" style="${s}background:var(${c})">${esc((m?.name||'?').trim().charAt(0).toUpperCase())}</span>`}
+async function shrinkAvatar(file){const bmp=await createImageBitmap(file);const side=Math.min(bmp.width,bmp.height);const cv=document.createElement('canvas');cv.width=cv.height=256;cv.getContext('2d').drawImage(bmp,(bmp.width-side)/2,(bmp.height-side)/2,side,side,0,0,256,256);return cv.toDataURL('image/jpeg',.8)}
+function photoPicker(m){return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span id="avPrev">${avatar(Object.assign({},m,{photo:formPhoto===undefined?m.photo:formPhoto}),64)}</span><label class="btn sm ghost" for="mPhoto" style="position:relative">${m.photo||formPhoto?'Change photo':'Add a photo'}<input type="file" id="mPhoto" accept="image/*" style="position:absolute;opacity:0;width:1px;height:1px"></label><button type="button" class="link" data-act="rmPhoto">Remove photo</button></div>`}
 const starSvg=(cls='')=>`<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true"><path fill="var(--star)" stroke="var(--star-ink)" stroke-width="1" d="M12 2.5l2.9 6 6.6.8-4.9 4.5 1.3 6.5L12 17l-5.9 3.3 1.3-6.5L2.5 9.3l6.6-.8z"/></svg>`;
 async function hashPin(p){const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(FAMILY_ID+':'+p));return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('')}
 
@@ -200,7 +202,7 @@ function renderMoney(){
 }
 function renderFamily(){
   const adult=isAdult();
-  let h=`<h2>Family</h2><div class="list">`+S.members.map(m=>`<div class="card chore">${avatar(m,40)}<div class="info"><div class="t">${esc(m.name)}</div><div class="sub"><span>${m.role==='adult'?'Grown-up · approves jobs':'Kid'}</span><span>${(+m.base||0)?fmt(+m.base)+' / month base':'No base allowance'}</span></div></div>${adult||!S.settings.pinHash?`<button class="btn sm ghost" data-act="editMember" data-id="${m.id}">Edit</button>`:''}</div>`).join('')+`</div>`;
+  let h=`<h2>Family</h2><div class="list">`+S.members.map(m=>`<div class="card chore">${avatar(m,40)}<div class="info"><div class="t">${esc(m.name)}</div><div class="sub"><span>${m.role==='adult'?'Grown-up · approves jobs':'Kid'}</span><span>${(+m.base||0)?fmt(+m.base)+' / month base':'No base allowance'}</span></div></div>${adult||!S.settings.pinHash?`<button class="btn sm ghost" data-act="editMember" data-id="${m.id}">Edit</button>`:m.id===me()?.id?`<button class="btn sm ghost" data-act="myPhoto" data-id="${m.id}">Photo</button>`:''}</div>`).join('')+`</div>`;
   if(adult||!S.settings.pinHash) h+=`<div style="margin-top:10px"><button class="btn block" data-act="addMember">Add a family member</button></div>`;
   h+=`<h2>Jobs and schedule</h2><div class="list">`+[...S.chores].sort((a,b)=>(a.title||'').localeCompare(b.title||'')).map(c=>{const ds=WEEK.filter(d=>c.days&&c.days[d]).map(d=>DAYN[d].slice(0,3)+' '+esc(member(c.days[d])?.name||'?'));return `<div class="card chore"><div class="info"><div class="t">${esc(c.title)}</div><div class="sub"><span class="val">${fmt(+c.value||0)}</span><span>${(c.items||[]).length} steps</span></div><div class="sub">${ds.join(' · ')||'Not scheduled'}</div></div>${adult?`<button class="btn sm ghost" data-act="editChore" data-id="${c.id}">Edit</button>`:`<button class="btn sm ghost" data-act="guide" data-id="${c.id}">Steps</button>`}</div>`}).join('')+`</div>`;
   if(adult){
@@ -242,15 +244,16 @@ function refreshSubmit(){
   b.textContent=isAdult()?'Mark done':'Send for approval';
   w.textContent=draft.busy?draft.busy:left?`${left} step${left>1?'s':''} left to check off`:needPhoto?'Add at least one photo of your work':'Ready to send';
 }
-function pinFields(label){return `<label for="pin1">${label}<input id="pin1" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" required autocomplete="off"></label>`}
+function pinFields(label,req=true){return `<label for="pin1">${label}<input id="pin1" name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" ${req?'required':''} autocomplete="off"></label>`}
 function memberForm(m,role){
   m=m||{role:role||'kid'};
   const needPin=!S.settings.pinHash;
   return `<h2>${m.id?'Edit '+esc(m.name):'Add a family member'}</h2><form id="fMember" data-id="${m.id||''}" class="sheet" style="padding:0">
   <label for="mName">Name<input id="mName" name="name" required maxlength="40" value="${esc(m.name||'')}" autocomplete="off"></label>
+  <div><b style="font-size:.9rem">Profile picture</b><div style="margin-top:6px">${photoPicker(m)}</div></div>
   <div class="row2"><label for="mRole">Role<select id="mRole" name="role"><option value="kid" ${m.role!=='adult'?'selected':''}>Kid</option><option value="adult" ${m.role==='adult'?'selected':''}>Grown-up</option></select></label>
   <label for="mBase">Monthly base ($)<input id="mBase" name="base" type="number" inputmode="decimal" min="0" step="0.01" value="${m.base||''}" placeholder="0.00"></label></div>
-  <div id="pinWrap" ${needPin&&m.role==='adult'?'':'hidden'}>${pinFields('Grown-up PIN (4–8 digits)')}<p class="muted" style="margin:4px 0 0;font-size:.85rem">Grown-ups enter this PIN to approve jobs, so kids can’t approve their own.</p></div>
+  <div id="pinWrap" ${needPin&&m.role==='adult'?'':'hidden'}>${pinFields('Grown-up PIN (4–8 digits)',needPin&&m.role==='adult')}<p class="muted" style="margin:4px 0 0;font-size:.85rem">Grown-ups enter this PIN to approve jobs, so kids can’t approve their own.</p></div>
   <p class="muted" style="margin:0;font-size:.85rem">Base is a set amount each month on top of job earnings.</p>
   <div class="actions">${m.id?`<button type="button" class="btn danger sm" data-act="rm" data-c="members" data-id="${m.id}">Remove</button>`:''}<div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Save</button></div></div></form>`;
 }
@@ -277,6 +280,7 @@ function payForm(m,mk){
 }
 function pinSheet(id){return `<h2>Grown-up PIN</h2><form id="fPin" data-id="${id}" class="sheet" style="padding:0">${pinFields('Enter the PIN for '+esc(member(id)?.name||'this grown-up'))}<p class="why" id="pinErr"></p><div class="actions"><div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Continue</button></div></div></form>`}
 function newPinSheet(){return `<h2>Change grown-up PIN</h2><form id="fNewPin" class="sheet" style="padding:0">${pinFields('New PIN (4–8 digits)')}<div class="actions"><div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Save PIN</button></div></div></form>`}
+function photoSheet(m){return `<h2>Your profile picture</h2><form id="fPhoto" data-id="${m.id}" class="sheet" style="padding:0">${photoPicker(m)}<div class="actions"><div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Save</button></div></div></form>`}
 function whoSheet(){
   return `<h2>Who’s using this phone?</h2><p class="muted" style="margin:0">Jobs finished on this phone count for this person.</p><div class="who">${S.members.map(m=>`<button data-act="setMe" data-id="${m.id}">${avatar(m)}<span><b>${esc(m.name)}</b><br><span class="muted" style="font-size:.85rem">${m.role==='adult'?'Grown-up':'Kid'}</span></span></button>`).join('')}</div>${S.members.some(m=>m.role==='adult')?'':'<button class="btn ghost" data-act="addAdult">I’m a grown-up, add me</button>'}`;
 }
@@ -296,6 +300,7 @@ async function shrink(file){
 
 /* ---------- events ---------- */
 document.addEventListener('change',e=>{
+  if(e.target.id==='mPhoto'&&e.target.files[0]){const f=e.target.files[0];e.target.value='';shrinkAvatar(f).then(d=>{formPhoto=d;const p=$('#avPrev');if(p)p.innerHTML=avatar({name:'',photo:d},64)}).catch(()=>toast('That picture couldn’t be used. Try another one.'))}
   if(e.target.id==='mRole'){const w=$('#pinWrap');if(w){const show=e.target.value==='adult'&&!S.settings.pinHash;w.hidden=!show;const p=$('#pin1');if(p)p.required=show}}
   if(e.target.id==='ph'&&draft){
     draft.files.push(...[...e.target.files].slice(0,6-draft.files.length));
@@ -317,9 +322,11 @@ document.addEventListener('click',async e=>{
     if(m?.role!=='adult')lsSet(PIN_OK,''); // a kid on this phone must enter the PIN to switch back to a grown-up
     lsSet(ME_KEY,id);filter=null;closeSheet();render();toast('Hi, '+(m?.name||'there')+'!')
   }
-  else if(act==='addMember'){openSheet(memberForm())}
-  else if(act==='addAdult'){openSheet(memberForm(null,'adult'))}
-  else if(act==='editMember'){openSheet(memberForm(member(id)))}
+  else if(act==='rmPhoto'){formPhoto='';const p=$('#avPrev');if(p)p.innerHTML=avatar({name:$('#mName')?.value||member(dlg.querySelector('form')?.dataset.id)?.name||'?',color:member(dlg.querySelector('form')?.dataset.id)?.color},64)}
+  else if(act==='myPhoto'){formPhoto=undefined;openSheet(photoSheet(member(id)))}
+  else if(act==='addMember'){formPhoto=undefined;openSheet(memberForm())}
+  else if(act==='addAdult'){formPhoto=undefined;openSheet(memberForm(null,'adult'))}
+  else if(act==='editMember'){formPhoto=undefined;openSheet(memberForm(member(id)))}
   else if(act==='addChore'){openSheet(choreForm())}
   else if(act==='editChore'){openSheet(choreForm(chore(id)))}
   else if(act==='guide'){e.preventDefault();openSheet(guideSheet(chore(id)))}
@@ -368,9 +375,15 @@ document.addEventListener('click',async e=>{
 });
 document.addEventListener('submit',async e=>{
   e.preventDefault(); const f=e.target, d=Object.fromEntries(new FormData(f));
+  if(f.id==='fPhoto'){
+    const old=member(f.dataset.id);if(!old){closeSheet();return}
+    const photo=formPhoto===undefined?(old.photo||''):formPhoto;closeSheet();
+    if(await put('members',Object.assign({},old,{photo})))toast('Picture saved');
+    return;
+  }
   if(f.id==='fMember'){
     const old=member(f.dataset.id);
-    const m={id:f.dataset.id||uid(),name:d.name.trim(),role:d.role,base:Math.max(0,+d.base||0),color:old?old.color:S.members.length%MCOL.length,createdAt:old?.createdAt||Date.now()};
+    const m={id:f.dataset.id||uid(),name:d.name.trim(),role:d.role,base:Math.max(0,+d.base||0),color:old?old.color:S.members.length%MCOL.length,photo:formPhoto===undefined?(old?.photo||''):formPhoto,createdAt:old?.createdAt||Date.now()};
     if(!m.name)return;
     if(m.role==='adult'&&!S.settings.pinHash){if(!/^\d{4,8}$/.test(d.pin||''))return;const h=await hashPin(d.pin);await put('settings',{id:'main',pinHash:h});lsSet(PIN_OK,h)}
     closeSheet();
