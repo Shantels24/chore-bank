@@ -209,7 +209,8 @@ function render(){
     v.innerHTML=`<div class="card setup"><h2>Enter your family code</h2><p>Everyone in your household types the same code once on their phone. It keeps your family’s chores, photos, and points private.</p><form id="fCode" class="sheet" style="padding:0"><label for="famCode">Family code<input id="famCode" name="code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="for example: purple-tacos-friday" ${codeState.busy?'disabled':''}></label><p class="why">${esc(codeState.busy||codeState.msg)}</p><button class="btn" type="submit" ${codeState.busy?'disabled':''}>Continue</button></form><p class="muted" style="font-size:.85rem;margin-top:12px">Pick something easy to say but hard to guess, at least 8 letters or numbers. Spaces and capital letters don’t matter.</p></div>`;return}
   if(mode==='error'){v.innerHTML=`<div class="card empty"><p>Couldn’t connect. Check your internet connection, then close and reopen the app.</p><p class="muted" style="font-size:.85rem">If this keeps happening, check that Anonymous sign-in is turned on in Firebase (setup step 2).</p></div>`;return}
   if(mode==='loading'){v.innerHTML=`<div class="card empty"><p class="muted">Opening your family chart…</p></div>`;return}
-  v.innerHTML = tab==='money'?renderMoney():tab==='family'?renderFamily():tab==='points'?renderPoints():renderChores();
+  const needKidPin=me()&&me().role!=='adult'&&!me().pinHash;
+  v.innerHTML = (needKidPin?`<div class="card" style="display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:6px;border-color:var(--star)"><span><b>Make your secret PIN</b><br><span class="muted" style="font-size:.88rem">4 numbers only you know, so nobody else can open your page.</span></span><button class="btn sm" data-act="myPin">Make my PIN</button></div>`:'')+(tab==='money'?renderMoney():tab==='family'?renderFamily():tab==='points'?renderPoints():renderChores());
   fillPhotos();
 }
 function renderChores(){
@@ -433,6 +434,7 @@ document.addEventListener('click',async e=>{
   else if(act==='view'){view=id;render()}
   else if(act==='month'){monthOff=Math.min(0,monthOff+ +b.dataset.d);render()}
   else if(act==='pickMe'){openSheet(whoSheet())}
+  else if(act==='myPin'){const m=me();if(m&&m.role!=='adult'&&!m.pinHash){openSheet(kidPinSheet(m.id,true));setTimeout(()=>$('#kp1')?.focus(),50)}}
   else if(act==='codeBack'){codeState={msg:'',busy:'',pending:''};render()}
   else if(act==='codeNew'){const fid=codeState.pending;if(!fid)return;FAM=fid;lsSet(FAM_KEY,fid);lsSet('chorebank-seeded','');lsSet(ME_KEY,'');codeState={msg:'',busy:'',pending:''};startListening()}
   else if(act==='setMe'){
