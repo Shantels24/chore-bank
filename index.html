@@ -40,6 +40,9 @@
 .fb.fix{border-left-color:var(--wait);background:var(--wait-soft)}
 .fb.good{border-left-color:var(--ok);background:var(--ok-soft)}
 .qchips{display:flex;flex-wrap:wrap;gap:6px}
+.wk .job.miss{color:var(--bad);text-decoration:line-through}
+.wk .job.miss::before{content:"✗ ";text-decoration:none;display:inline-block}
+.due{border-color:var(--wait);background:var(--wait-soft)}
 .qchips button{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:5px 10px;font-size:.85rem;cursor:pointer}
 </style>
 </head>
@@ -190,6 +193,10 @@ function account(m,mk){
 }
 const fbBox=(txt,kind,label)=>txt?`<div class="fb ${kind||''}"><b>${esc(label||'Note from a grown-up')}</b>${esc(txt)}</div>`:'';
 const earlierFix=l=>S.logs.filter(x=>x.choreId===l.choreId&&x.date===l.date&&x.memberId===l.memberId&&x.status==='redo'&&x.feedback&&(x.ts||0)<(l.ts||0)).sort((a,b)=>(b.ts||0)-(a.ts||0))[0];
+function jobsFor(mid,date){const dow=String(new Date(date+'T12:00').getDay());return jobsOn(dow).filter(j=>j.who===mid)}
+const doneLog=(cid,date)=>S.logs.some(l=>l.choreId===cid&&l.date===date&&(l.status==='approved'||l.status==='pending'));
+function missedList(mid,days=7){const out=[];for(let i=1;i<=days;i++){const d=addDays(today(),-i);jobsFor(mid,d).forEach(j=>{if(!doneLog(j.c.id,d))out.push({c:j.c,date:d,mid})})}return out}
+const missKey=m=>'miss-'+m.mid+'-'+m.c.id+'-'+m.date;
 const visibleChores=()=>isAdult()?[...S.chores]:S.chores.filter(c=>me()&&c.days&&Object.values(c.days).includes(me().id));
 const pendingLogs=()=>S.logs.filter(l=>l.status==='pending').sort((a,b)=>(a.ts||0)-(b.ts||0));
 function sections(c){const out=[];(c.items||[]).forEach(it=>{let g=out[out.length-1];if(!g||g.s!==it.s){g={s:it.s,items:[]};out.push(g)}g.items.push(it.t)});return out}
@@ -235,6 +242,16 @@ function renderChores(){
   let js=jobsOn(dow).filter(j=>filter==='all'||j.who===filter);
   kids().filter(x=>filter==='all'||filter===x.id).forEach(x=>{if(dutyToday(x.id)&&!js.some(j=>j.who===x.id&&/bathroom/i.test(j.c.title||'')))js.push({c:dutyChore(x.id),who:x.id})});
   js.sort((a,b)=>(member(a.who)?.name||'').localeCompare(member(b.who)?.name||'')||(a.c.title||'').localeCompare(b.c.title||''));
+  if(!isAdult()&&me()){
+    const left=js.filter(j=>!doneLog(j.c.id,t)).length;
+    if(left) h+=`<div class="card due" style="margin-top:8px"><b>⏰ ${left} job${left>1?'s':''} still to do today</b><div style="font-size:.9rem;margin-top:2px">Finish every step and send your photo <b>today</b>. Jobs that aren’t sent today don’t get paid.</div></div>`;
+    const ms=missedList(me().id);
+    if(ms.length) h+=`<div class="card" style="margin-top:8px"><b>Missed recently (not paid)</b><div class="sub" style="font-size:.88rem;margin-top:4px;display:grid;gap:2px">${ms.map(m=>`<span>✗ ${esc(m.c.title)} · ${esc(shortDate(m.date))}</span>`).join('')}</div></div>`;
+  }
+  if(isAdult()){
+    const all=kids().filter(x=>filter==='all'||filter===x.id).flatMap(x=>missedList(x.id));
+    if(all.length) h+=`<h3>Missed jobs (last 7 days, not paid)</h3><div class="list">`+all.sort((a,b)=>b.date.localeCompare(a.date)).map(m=>{const k=member(m.mid),done=S.points.some(e=>e.missKey===missKey(m));return `<div class="card chore">${avatar(k)}<div class="info"><div class="t">${esc(m.c.title)}</div><div class="sub"><span>${esc(k?.name||'')}</span><span>${esc(shortDate(m.date))}</span></div></div>${done?'<span class="pill pbad">Points added</span>':`<button class="btn sm ghost" data-act="missPts" data-key="${esc(missKey(m))}" data-mid="${m.mid}" data-cid="${m.c.id}" data-date="${m.date}">Add 2 points</button>`}</div>`}).join('')+`</div>`;
+  }
   if(!js.length) h+=`<div class="card empty" style="margin-top:8px"><p class="muted">No jobs for ${filter==='all'?'anyone':esc(member(filter)?.name||'this person')} today. Enjoy the day off!</p></div>`;
   else h+=`<div class="list" style="margin-top:8px">`+js.map(j=>jobCard(j.c,j.who,t)).join('')+`</div>`;
   return h;
@@ -256,9 +273,9 @@ function renderWeek(){
   weekDates().forEach(({dow,date})=>{
     h+=`<tr class="${date===t?'today':''}"><th scope="row">${DAYN[dow].slice(0,3)}</th>`+kids.map(k=>{
       const js=jobsOn(String(dow)).filter(j=>j.who===k.id);
-      return `<td>${js.map(j=>{const l=logFor(j.c.id,date);const cls=l&&l.status==='approved'?'ok':l&&l.status==='pending'?'wait':'';return `<span class="job ${cls}">${esc(j.c.short||j.c.title)}</span>`}).join('')||'<span class="muted">—</span>'}</td>`}).join('')+`</tr>`;
+      return `<td>${js.map(j=>{const l=logFor(j.c.id,date);const cls=l&&l.status==='approved'?'ok':l&&l.status==='pending'?'wait':date<t?'miss':'';return `<span class="job ${cls}">${esc(j.c.short||j.c.title)}</span>`}).join('')||'<span class="muted">—</span>'}</td>`}).join('')+`</tr>`;
   });
-  h+=`</tbody></table></div><p class="muted" style="font-size:.85rem">★ approved · ◔ waiting for a grown-up. Each kid gets the same number of jobs, and the jobs rotate so no one is stuck with the same one every day.</p>`;
+  h+=`</tbody></table></div><p class="muted" style="font-size:.85rem">★ approved · ◔ waiting for a grown-up · ✗ missed (not paid). Each kid gets the same number of jobs, and the jobs rotate so no one is stuck with the same one every day.</p>`;
   h+=`<h3>What each job includes</h3><div class="list">`+visibleChores().sort((a,b)=>(a.title||'').localeCompare(b.title||'')).map(c=>`<button class="card chore" style="text-align:left;cursor:pointer" data-act="guide" data-id="${c.id}"><div class="info"><div class="t">${esc(c.title)}</div><div class="sub">${sections(c).map(g=>`<span>${esc(g.s)}</span>`).join('')}</div></div><span class="muted">›</span></button>`).join('')+`</div>`;
   return h;
 }
@@ -332,7 +349,7 @@ function startSheet(c,who){
   <p style="margin:0">Check off each step as you finish it.</p>${checklistHtml(c,true)}
   <div class="check"><h4>Final check before you say “I’m finished”</h4>${FINAL.map((t,i)=>`<label><input type="checkbox" id="fk-${i}" class="ck">${esc(t)}</label>`).join('')}</div>${RULE}
   <div><h4 style="font-family:var(--display);margin:4px 0 8px">Snapshot of your finished work${adult?' (optional for grown-ups)':''}</h4>
-  <label class="camera" for="ph">📷 Take or add photos<span class="muted" style="font-weight:400;font-size:.85rem">Show the whole area so it can be checked</span><input type="file" id="ph" accept="image/*" multiple></label>
+  <label class="camera" for="ph">📷 Take a photo now<span class="muted" style="font-weight:400;font-size:.85rem">Show the whole area. Only new photos from the camera count. Old pictures can’t be used.</span><input type="file" id="ph" accept="image/*" capture="environment"></label>
   <div class="photos" id="phPrev" style="margin-top:8px"></div></div>
   <button class="btn block" id="submitJob" data-act="submit" disabled>Send for approval</button><p class="why" id="why"></p>
   <button class="btn ghost" data-act="close">Not yet</button>`;
@@ -399,13 +416,15 @@ function photoSheet(m){return `<h2>Your profile picture</h2><form id="fPhoto" da
 function whoSheet(){
   return `<h2>Who’s using this phone?</h2><p class="muted" style="margin:0">Jobs finished on this phone count for this person.</p><div class="who">${S.members.map(m=>`<button data-act="setMe" data-id="${m.id}">${avatar(m)}<span><b>${esc(m.name)}</b><br><span class="muted" style="font-size:.85rem">${m.role==='adult'?'Grown-up':'Kid'}</span></span></button>`).join('')}</div>${S.members.some(m=>m.role==='adult')?'':'<button class="btn ghost" data-act="addAdult">I’m a grown-up, add me</button>'}`;
 }
-async function shrink(file){
+async function shrink(file,stamp){
   const bmp=await createImageBitmap(file);
+  const label=stamp?'Taken '+new Date(file.lastModified||Date.now()).toLocaleString(undefined,{weekday:'short',month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'}):'';
   let max=1280,q=.7,out='';
   for(let i=0;i<5;i++){
     const sc=Math.min(1,max/Math.max(bmp.width,bmp.height));
     const cv=document.createElement('canvas');cv.width=Math.round(bmp.width*sc);cv.height=Math.round(bmp.height*sc);
-    cv.getContext('2d').drawImage(bmp,0,0,cv.width,cv.height);
+    const g=cv.getContext('2d');g.drawImage(bmp,0,0,cv.width,cv.height);
+    if(label){const fs=Math.max(14,Math.round(cv.width/28));g.font=`700 ${fs}px system-ui,sans-serif`;const w=g.measureText(label).width+fs;g.fillStyle='rgba(0,0,0,.6)';g.fillRect(cv.width-w-8,cv.height-fs*1.8-8,w,fs*1.8);g.fillStyle='#fff';g.textBaseline='middle';g.fillText(label,cv.width-w-8+fs/2,cv.height-fs*.9-8)}
     out=cv.toDataURL('image/jpeg',q);
     if(out.length<700000)return out;
     max=Math.round(max*.75);q=Math.max(.45,q-.08);
@@ -420,7 +439,9 @@ document.addEventListener('change',e=>{
   if(e.target.id==='mPhoto'&&e.target.files[0]){const f=e.target.files[0];e.target.value='';shrinkAvatar(f).then(d=>{formPhoto=d;const p=$('#avPrev');if(p)p.innerHTML=avatar({name:'',photo:d},64)}).catch(()=>toast('That picture couldn’t be used. Try another one.'))}
   if(e.target.id==='mRole'){const kw=$('#kidPinWrap');if(kw)kw.hidden=e.target.value==='adult';const rw=$('#rcWrap');if(rw)rw.hidden=e.target.value==='adult';const w=$('#pinWrap');if(w){const show=e.target.value==='adult'&&!S.settings.pinHash;w.hidden=!show;const p=$('#pin1');if(p)p.required=show}}
   if(e.target.id==='ph'&&draft){
-    draft.files.push(...[...e.target.files].slice(0,6-draft.files.length));
+    let fresh=[...e.target.files];
+    if(!draft.rc){const old=fresh.filter(f=>f.lastModified&&Date.now()-f.lastModified>10*60*1000);fresh=fresh.filter(f=>!old.includes(f));if(old.length)toast('That photo isn’t new. Use the camera to take a photo right now.')}
+    draft.files.push(...fresh.slice(0,6-draft.files.length));
     $('#phPrev').innerHTML=draft.files.map((f,i)=>`<button type="button" data-act="unphoto" data-i="${i}" aria-label="Remove photo"><img src="${URL.createObjectURL(f)}" alt="Photo ${i+1}"></button>`).join('')+(draft.files.length?'<span class="muted" style="font-size:.8rem;align-self:center">Tap a photo to remove it</span>':'');
     e.target.value='';refreshSubmit();
   } else if(e.target.classList.contains('ck')) refreshSubmit();
@@ -479,7 +500,7 @@ document.addEventListener('click',async e=>{
     const logId=uid(), ids=[];
     for(let i=0;i<draft.files.length;i++){
       draft.busy=`Saving photo ${i+1} of ${draft.files.length}…`;refreshSubmit();
-      let data='';try{data=await shrink(draft.files[i])}catch(err){}
+      let data='';try{data=await shrink(draft.files[i],true)}catch(err){}
       if(!data){draft.busy='';refreshSubmit();toast('That photo couldn’t be used. Try taking it again.');return}
       const pid=uid();
       if(!await put('photos',{id:pid,data,logId,ts:Date.now()})){draft.busy='';refreshSubmit();return}
@@ -494,6 +515,13 @@ document.addEventListener('click',async e=>{
   else if(act==='undo'){await delLog(S.logs.find(x=>x.id===id))}
   else if(act==='rcSend'||act==='rcNew'){draft={rc:true,files:[]};openSheet(rcSheet(id,act==='rcNew'))}
   else if(act==='rcDecide'){const r=S.rcards.find(x=>x.id===id);if(r&&isAdult()){const ok=b.dataset.ok==='1',k=member(r.memberId);openSheet(`<h2>${ok?'Add report card bonus':'No bonus this time'}</h2><p class="muted" style="margin:0">${esc(k?.name||'')} · ${esc(r.period)}${ok?' · '+fmt(rcAmount(k)):''}</p><form id="fRcDecide" data-id="${r.id}" data-ok="${ok?1:0}" class="sheet" style="padding:0"><label for="rdFb">Note for ${esc(k?.name||'them')} (optional)<textarea id="rdFb" name="feedback" maxlength="300" style="min-height:80px" placeholder="${ok?'Example: So proud of you!':'Example: This was a progress report. Send the report card when it comes home.'}"></textarea></label><div class="actions"><div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn ${ok?'ok':''}" type="submit">${ok?'Add '+fmt(rcAmount(k)):'Save'}</button></div></div></form>`)}}
+  else if(act==='missPts'){
+    if(!isAdult())return;const mid=b.dataset.mid,c=chore(b.dataset.cid),date=b.dataset.date,key=b.dataset.key,r=RULE_BY_ID['chores'];
+    if(S.points.some(e=>e.missKey===key))return;
+    const wk=weekKey(date),prior=S.points.filter(e=>e.memberId===mid&&e.ruleId==='chores'&&weekKey(e.date)===wk).length,dbl=prior>=2,pts=r.p*(dbl?2:1);
+    b.disabled=true;
+    if(await put('logs',{id:uid(),kind:'points',memberId:mid,ruleId:'chores',rule:r.t,base:r.p,pts,repeat:dbl,note:(c?.title||'Job')+' was not done',date,ts:Date.now(),by:me()?.id||'',missKey:key}))toast(`Added ${pts} points to ${member(mid)?.name}`);
+  }
   else if(act==='fbOpen'){const l=S.logs.find(x=>x.id===id);if(l&&isAdult()){openSheet(fbSheet(l,b.dataset.mode));setTimeout(()=>$('#fbText')?.focus(),50)}}
   else if(act==='fbQuick'){const t=$('#fbText');if(t){const cur=t.value.trim(),q=b.dataset.q;t.value=(cur?cur.replace(/([^.!?])$/,'$1.')+' ':'')+(/[.!?]$/.test(q)?q:q+'.')+' ';t.focus()}}
   else if(act==='approve'){const l=S.logs.find(x=>x.id===id);if(l&&isAdult()){await put('logs',Object.assign({},l,{status:'approved',approvedBy:me().id}));toast('Approved')}}
