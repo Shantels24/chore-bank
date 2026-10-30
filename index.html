@@ -179,10 +179,10 @@ function fillPhotos(){document.querySelectorAll('img[data-photo]').forEach(async
 /* ---------- logic ---------- */
 const jobsOn=dow=>S.chores.filter(c=>c.days&&c.days[dow]).map(c=>({c,who:c.days[dow]}));
 const logFor=(cid,date)=>S.logs.filter(l=>l.choreId===cid&&l.date===date).sort((a,b)=>(b.ts||0)-(a.ts||0))[0];
-const RC_DEFAULT={'m-kazlyn':20,'m-jahari':40,'m-makayla':50};
+const RC_DEFAULT={'m-kazlyn':20,'m-jahari':30,'m-makayla':40};
 function payRate(m){if(!m||m.role==='adult')return null;if(m.rate!=null&&m.rate!=='')return +m.rate||0;const n=(m.name||'').toLowerCase();return /kazlyn/.test(n)?1:/jahari/.test(n)||/kayla/.test(n)?2:null}
 function payFor(c,who){if(String(c.id).startsWith('duty-bath'))return 0;const r=payRate(member(who));return r!=null?r:(+c.value||0)}
-function rcAmount(m){if(!m)return 0;if(m.rcBonus!=null&&m.rcBonus!=='')return +m.rcBonus||0;if(RC_DEFAULT[m.id]!=null)return RC_DEFAULT[m.id];const n=(m.name||'').toLowerCase();return /kazlyn/.test(n)?20:/jahari/.test(n)?40:/kayla/.test(n)?50:0}
+function rcAmount(m){if(!m)return 0;if(m.rcBonus!=null&&m.rcBonus!=='')return +m.rcBonus||0;if(RC_DEFAULT[m.id]!=null)return RC_DEFAULT[m.id];const n=(m.name||'').toLowerCase();return /kazlyn/.test(n)?20:/jahari/.test(n)?30:/kayla/.test(n)?40:0}
 const RC_PERIODS=['1st grading period','2nd grading period','3rd grading period','4th grading period','5th grading period','6th grading period','Final report card'];
 function account(m,mk){
   const L=S.logs.filter(l=>l.memberId===m.id&&String(l.date).startsWith(mk)&&!String(l.choreId).startsWith('duty-bath'));
