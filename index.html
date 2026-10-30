@@ -180,6 +180,8 @@ function fillPhotos(){document.querySelectorAll('img[data-photo]').forEach(async
 const jobsOn=dow=>S.chores.filter(c=>c.days&&c.days[dow]).map(c=>({c,who:c.days[dow]}));
 const logFor=(cid,date)=>S.logs.filter(l=>l.choreId===cid&&l.date===date).sort((a,b)=>(b.ts||0)-(a.ts||0))[0];
 const RC_DEFAULT={'m-kazlyn':20,'m-jahari':40,'m-makayla':50};
+function payRate(m){if(!m||m.role==='adult')return null;if(m.rate!=null&&m.rate!=='')return +m.rate||0;const n=(m.name||'').toLowerCase();return /kazlyn/.test(n)?1:/jahari/.test(n)||/kayla/.test(n)?2:null}
+function payFor(c,who){if(String(c.id).startsWith('duty-bath'))return 0;const r=payRate(member(who));return r!=null?r:(+c.value||0)}
 function rcAmount(m){if(!m)return 0;if(m.rcBonus!=null&&m.rcBonus!=='')return +m.rcBonus||0;if(RC_DEFAULT[m.id]!=null)return RC_DEFAULT[m.id];const n=(m.name||'').toLowerCase();return /kazlyn/.test(n)?20:/jahari/.test(n)?40:/kayla/.test(n)?50:0}
 const RC_PERIODS=['1st grading period','2nd grading period','3rd grading period','4th grading period','5th grading period','6th grading period','Final report card'];
 function account(m,mk){
@@ -189,7 +191,7 @@ function account(m,mk){
   const P=S.payouts.filter(p=>p.memberId===m.id&&p.month===mk);
   const paid=P.reduce((a,p)=>a+(+p.amount||0),0), base=+m.base||0;
   const RC=S.rcards.filter(r=>r.memberId===m.id&&r.status==='approved'&&String(r.decidedDate||r.date).startsWith(mk)),bonus=RC.reduce((a,r)=>a+(+r.amount||0),0);
-  const MS=m.role==='adult'?[]:missedInMonth(m.id,mk).filter(x=>!isExcused(x)),missed=MS.reduce((a,x)=>a+(+x.c.value||0),0);
+  const MS=m.role==='adult'?[]:missedInMonth(m.id,mk).filter(x=>!isExcused(x)),missed=MS.reduce((a,x)=>a+payFor(x.c,m.id),0);
   const total=Math.max(0,base+earned+bonus-missed);
   return {L,ok,wait,earned,pending,P,paid,base,RC,bonus,MS,missed,total,owed:total-paid};
 }
@@ -255,11 +257,11 @@ function renderChores(){
     if(left) h+=`<div class="card due" style="margin-top:8px"><b>⏰ ${left} job${left>1?'s':''} still to do today</b><div style="font-size:.9rem;margin-top:2px">Finish every step and send your photo <b>today</b>. A job that isn’t sent today is taken <b>off</b> your allowance.</div></div>`;
     const ms=missedList(me().id);
     const msx=ms.filter(m=>!isExcused(m));
-    if(msx.length) h+=`<div class="card" style="margin-top:8px"><b>Missed recently (taken off your allowance)</b><div class="sub" style="font-size:.88rem;margin-top:4px;display:grid;gap:2px">${msx.map(m=>`<span style="color:var(--bad)">✗ ${esc(m.c.title)} · ${esc(shortDate(m.date))} · −${fmt(+m.c.value||0)}</span>`).join('')}</div></div>`;
+    if(msx.length) h+=`<div class="card" style="margin-top:8px"><b>Missed recently (taken off your allowance)</b><div class="sub" style="font-size:.88rem;margin-top:4px;display:grid;gap:2px">${msx.map(m=>`<span style="color:var(--bad)">✗ ${esc(m.c.title)} · ${esc(shortDate(m.date))} · −${fmt(payFor(m.c,me().id))}</span>`).join('')}</div></div>`;
   }
   if(isAdult()){
     const all=kids().filter(x=>filter==='all'||filter===x.id).flatMap(x=>missedList(x.id));
-    if(all.length) h+=`<h3>Missed jobs (last 7 days)</h3><div class="list">`+all.sort((a,b)=>b.date.localeCompare(a.date)).map(m=>{const k=member(m.mid),ex=isExcused(m);return `<div class="card chore">${avatar(k)}<div class="info"><div class="t">${esc(m.c.title)}</div><div class="sub"><span>${esc(k?.name||'')}</span><span>${esc(shortDate(m.date))}</span>${ex?'<span class="pill ok">Excused</span>':`<span class="pill pbad">−${fmt(+m.c.value||0)} from allowance</span>`}</div></div><button class="link" data-act="${ex?'unexcuse':'excuse'}" data-key="${esc(missKey(m))}" data-mid="${m.mid}" data-date="${m.date}">${ex?'Undo excuse':'Excuse'}</button></div>`}).join('')+`</div><p class="muted" style="font-size:.85rem;margin:6px 0 0">Missed jobs are taken off that month’s allowance automatically. Tap Excuse for a sick day or a good reason.</p>`;
+    if(all.length) h+=`<h3>Missed jobs (last 7 days)</h3><div class="list">`+all.sort((a,b)=>b.date.localeCompare(a.date)).map(m=>{const k=member(m.mid),ex=isExcused(m);return `<div class="card chore">${avatar(k)}<div class="info"><div class="t">${esc(m.c.title)}</div><div class="sub"><span>${esc(k?.name||'')}</span><span>${esc(shortDate(m.date))}</span>${ex?'<span class="pill ok">Excused</span>':`<span class="pill pbad">−${fmt(payFor(m.c,m.mid))} from allowance</span>`}</div></div><button class="link" data-act="${ex?'unexcuse':'excuse'}" data-key="${esc(missKey(m))}" data-mid="${m.mid}" data-date="${m.date}">${ex?'Undo excuse':'Excuse'}</button></div>`}).join('')+`</div><p class="muted" style="font-size:.85rem;margin:6px 0 0">Missed jobs are taken off that month’s allowance automatically. Tap Excuse for a sick day or a good reason.</p>`;
   }
   if(!js.length) h+=`<div class="card empty" style="margin-top:8px"><p class="muted">No jobs for ${filter==='all'?'anyone':esc(member(filter)?.name||'this person')} today. Enjoy the day off!</p></div>`;
   else h+=`<div class="list" style="margin-top:8px">`+js.map(j=>jobCard(j.c,j.who,t)).join('')+`</div>`;
@@ -268,7 +270,7 @@ function renderChores(){
 function jobCard(c,who,date){
   const l=logFor(c.id,date), k=member(who), secs=sections(c);
   const peek=`<details class="peek"><summary>What this job includes</summary><ul>${secs.map(g=>`<li><b>${esc(g.s)}</b>: ${g.items.length} steps</li>`).join('')}</ul><button class="link" data-act="guide" data-id="${c.id}">See every step</button></details>`;
-  const head=`<div class="info"><div class="t">${esc(c.title)}</div><div class="sub"><span>${esc(k?.name||'Unassigned')}</span>${valTag(c)}</div>`;
+  const head=`<div class="info"><div class="t">${esc(c.title)}</div><div class="sub"><span>${esc(k?.name||'Unassigned')}</span>${valTag(c,who)}</div>`;
   if(l&&l.status!=='redo'){
     const canUndo=isAdult()||(l.loggedBy===me()?.id&&l.status==='pending');
     return `<div class="card chore">${starSvg('sticker')}${head}<div class="sub" style="margin-top:4px">${l.status==='pending'?'<span class="pill wait">Photo sent · waiting for OK</span>':'<span class="pill ok">Approved</span>'}</div>${l.status==='approved'?fbBox(l.feedback,'good'):''}</div>${canUndo?`<button class="link" data-act="undo" data-id="${l.id}">Undo</button>`:''}</div>`;
@@ -297,7 +299,7 @@ function renderMoney(){
   if(RCP.length) h+=`<h3>Report cards to check</h3><div class="list">`+RCP.map(r=>{const k=member(r.memberId);return `<div class="card acct"><div class="chore">${avatar(k)}<div class="info"><div class="t">${esc(k?.name||'')} · ${esc(r.period)}</div><div class="sub"><span>Sent ${esc(shortDate(r.date))}</span><span class="val">${fmt(rcAmount(k))} if all A’s and B’s</span></div></div></div>${(r.photos||[]).length?`<div class="photos">${r.photos.map(p=>`<button data-act="photo" data-id="${esc(p)}" aria-label="View report card larger"><img data-photo="${esc(p)}" alt="Report card photo"></button>`).join('')}</div>`:''}<div class="fb fix"><b>Check</b>Make sure it’s the REPORT CARD, not a progress report, and every grade is an A or B.</div><div class="actions"><button class="btn sm ghost" data-act="rcDecide" data-id="${r.id}" data-ok="0">Not this time</button><button class="btn sm ok" data-act="rcDecide" data-id="${r.id}" data-ok="1">All A’s & B’s: add ${fmt(rcAmount(k))}</button></div></div>`}).join('')+`</div>`;
   h+=`<div class="list" style="margin-top:12px">`+list.map(m=>{
     const A=account(m,mk);
-    const hist=[...A.L.map(l=>({d:l.date,t:l.title+(l.status==='pending'?' (waiting)':l.status==='redo'?' (sent back)':''),v:l.status==='redo'?0:+l.value||0})),...A.P.map(p=>({d:p.date,t:'Paid'+(p.note?' · '+p.note:''),v:-(+p.amount||0)})),...A.RC.map(r=>({d:r.decidedDate||r.date,t:'Report card bonus · '+r.period,v:+r.amount||0})),...A.MS.map(x=>({d:x.date,t:'Missed: '+x.c.title,v:-(+x.c.value||0)}))].sort((a,b)=>String(b.d).localeCompare(String(a.d)));
+    const hist=[...A.L.map(l=>({d:l.date,t:l.title+(l.status==='pending'?' (waiting)':l.status==='redo'?' (sent back)':''),v:l.status==='redo'?0:+l.value||0})),...A.P.map(p=>({d:p.date,t:'Paid'+(p.note?' · '+p.note:''),v:-(+p.amount||0)})),...A.RC.map(r=>({d:r.decidedDate||r.date,t:'Report card bonus · '+r.period,v:+r.amount||0})),...A.MS.map(x=>({d:x.date,t:'Missed: '+x.c.title,v:-payFor(x.c,x.mid)}))].sort((a,b)=>String(b.d).localeCompare(String(a.d)));
     return `<div class="card acct"><div class="head">${avatar(m,40)}<div class="nm">${esc(m.name)}<div class="stars" aria-label="${A.ok.length} approved jobs">${A.ok.slice(0,40).map(()=>starSvg()).join('')}</div></div><div class="owed money">${fmt(A.owed)}<small>${A.owed>0?'still owed':A.owed<0?'paid ahead':'all paid'}</small></div></div>
     <div class="ledger"><span>Monthly base</span><span class="r">${fmt(A.base)}</span><span>Jobs approved (${A.ok.length})</span><span class="r">+${fmt(A.earned)}</span>${A.pending?`<span class="muted">Waiting for OK (${A.wait.length})</span><span class="r muted">${fmt(A.pending)}</span>`:''}${A.bonus?`<span>Report card bonus</span><span class="r">+${fmt(A.bonus)}</span>`:''}${A.missed?`<span style="color:var(--bad)">Missed jobs (${A.MS.length})</span><span class="r" style="color:var(--bad)">−${fmt(A.missed)}</span>`:''}<span>Paid out</span><span class="r">−${fmt(A.paid)}</span></div>
     ${m.role!=='adult'?rcBlock(m):''}
@@ -331,7 +333,7 @@ function renderFamily(){
   const adult=isAdult();
   let h=`<h2>Family</h2><div class="list">`+S.members.map(m=>`<div class="card chore">${avatar(m,40)}<div class="info"><div class="t">${esc(m.name)}</div><div class="sub"><span>${m.role==='adult'?'Grown-up · approves jobs':'Kid'}</span>${adult||m.id===me()?.id?`<span>${(+m.base||0)?fmt(+m.base)+' / month base':'No base allowance'}</span>`:''}${adult&&m.role!=='adult'?`<span>${m.pinHash?'PIN set':'No PIN yet'}</span>`:''}</div></div>${adult||!S.settings.pinHash?`<button class="btn sm ghost" data-act="editMember" data-id="${m.id}">Edit</button>`:m.id===me()?.id?`<button class="btn sm ghost" data-act="myPhoto" data-id="${m.id}">Photo</button>`:''}</div>`).join('')+`</div>`;
   if(adult||!S.settings.pinHash) h+=`<div style="margin-top:10px"><button class="btn block" data-act="addMember">Add a family member</button></div>`;
-  h+=`<h2>${adult?'Jobs and schedule':'My jobs'}</h2><div class="list">`+visibleChores().sort((a,b)=>(a.title||'').localeCompare(b.title||'')).map(c=>{const ds=WEEK.filter(d=>c.days&&c.days[d]&&(adult||c.days[d]===me()?.id)).map(d=>DAYN[d].slice(0,3)+' '+esc(member(c.days[d])?.name||'?'));return `<div class="card chore"><div class="info"><div class="t">${esc(c.title)}</div><div class="sub">${valTag(c)}<span>${(c.items||[]).length} steps</span></div><div class="sub">${ds.join(' · ')||'Not scheduled'}</div></div>${adult?`<button class="btn sm ghost" data-act="editChore" data-id="${c.id}">Edit</button>`:`<button class="btn sm ghost" data-act="guide" data-id="${c.id}">Steps</button>`}</div>`}).join('')+`</div>`;
+  h+=`<h2>${adult?'Jobs and schedule':'My jobs'}</h2><div class="list">`+visibleChores().sort((a,b)=>(a.title||'').localeCompare(b.title||'')).map(c=>{const ds=WEEK.filter(d=>c.days&&c.days[d]&&(adult||c.days[d]===me()?.id)).map(d=>DAYN[d].slice(0,3)+' '+esc(member(c.days[d])?.name||'?'));return `<div class="card chore"><div class="info"><div class="t">${esc(c.title)}</div><div class="sub">${valTag(c,adult?null:me()?.id)}<span>${(c.items||[]).length} steps</span></div><div class="sub">${ds.join(' · ')||'Not scheduled'}</div></div>${adult?`<button class="btn sm ghost" data-act="editChore" data-id="${c.id}">Edit</button>`:`<button class="btn sm ghost" data-act="guide" data-id="${c.id}">Steps</button>`}</div>`}).join('')+`</div>`;
   if(adult){
     h+=`<div style="margin-top:10px"><button class="btn block" data-act="addChore">Add a job</button></div>`;
     h+=`<h2>Grown-up settings</h2><div class="list"><button class="btn ghost block" data-act="changePin">Change grown-up PIN</button><button class="btn ghost block" data-act="cleanPhotos">Delete photos older than 60 days</button></div><p class="muted" style="font-size:.85rem">Clearing old photos keeps you inside Firebase’s free storage. Job history and money totals stay.</p>`;
@@ -353,7 +355,7 @@ const RULE=`<div class="rule"><b>The rule:</b> “It looks okay” is not the sa
 function guideSheet(c){return `<h2>${esc(c.title)}</h2><p class="muted" style="margin:0">Every step for this job. When you’re finished, a photo of your work goes to a grown-up.</p>${checklistHtml(c,false)}${RULE}<button class="btn ghost" data-act="close">Close</button>`}
 function startSheet(c,who){
   const k=member(who), adult=isAdult();
-  return `<h2>${esc(c.title)}</h2><p class="muted" style="margin:0">${esc(k?.name||'')} · ${DAYN[new Date().getDay()]} · ${valTag(c)}</p>
+  return `<h2>${esc(c.title)}</h2><p class="muted" style="margin:0">${esc(k?.name||'')} · ${DAYN[new Date().getDay()]} · ${valTag(c,who)}</p>
   ${(()=>{const l=logFor(c.id,today());return l&&l.status==='redo'&&l.feedback?fbBox(l.feedback,'fix','What to fix this time'):''})()}
   <p style="margin:0">Check off each step as you finish it.</p>${checklistHtml(c,true)}
   <div class="check"><h4>Final check before you say “I’m finished”</h4>${FINAL.map((t,i)=>`<label><input type="checkbox" id="fk-${i}" class="ck">${esc(t)}</label>`).join('')}</div>${RULE}
@@ -382,7 +384,8 @@ function memberForm(m,role){
   <div class="row2"><label for="mRole">Role<select id="mRole" name="role"><option value="kid" ${m.role!=='adult'?'selected':''}>Kid</option><option value="adult" ${m.role==='adult'?'selected':''}>Grown-up</option></select></label>
   <label for="mBase">Monthly base ($)<input id="mBase" name="base" type="number" inputmode="decimal" min="0" step="0.01" value="${m.base||''}" placeholder="0.00"></label></div>
   <div id="pinWrap" ${needPin&&m.role==='adult'?'':'hidden'}>${pinFields('Grown-up PIN (4–8 digits)',needPin&&m.role==='adult')}<p class="muted" style="margin:4px 0 0;font-size:.85rem">Grown-ups enter this PIN to approve jobs, so kids can’t approve their own.</p></div>
-  <div id="rcWrap" ${m.role==='adult'?'hidden':''}><label for="mRc">Report card bonus for all A’s and B’s ($)<input id="mRc" name="rcBonus" type="number" inputmode="decimal" min="0" step="1" value="${m.id||m.rcBonus!=null?rcAmount(m):''}" placeholder="0"></label></div>
+  <div id="rcWrap" ${m.role==='adult'?'hidden':''}><label for="mRc">Report card bonus for all A’s and B’s ($)<input id="mRc" name="rcBonus" type="number" inputmode="decimal" min="0" step="1" value="${m.id||m.rcBonus!=null?rcAmount(m):''}" placeholder="0"></label>
+  <label for="mRate" style="margin-top:10px">Pay per job ($)<input id="mRate" name="rate" type="number" inputmode="decimal" min="0" step="0.05" value="${payRate(m)??''}" placeholder="Use each job's own pay"></label></div>
   <div id="kidPinWrap" ${m.role==='adult'?'hidden':''}><label for="kPin">${m.pinHash?'New 4-digit PIN (leave blank to keep the current one)':'4-digit PIN (optional; kids can also make their own)'}<input id="kPin" name="kidpin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off"></label><p class="muted" style="margin:4px 0 0;font-size:.85rem">Kids use their PIN to switch to their name, so siblings can’t open each other’s allowance or points.</p></div>
   <p class="muted" style="margin:0;font-size:.85rem">Base is a set amount each month on top of job earnings.</p>
   <div class="actions">${m.id?`<button type="button" class="btn danger sm" data-act="rm" data-c="members" data-id="${m.id}">Remove</button>`:''}<div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn" type="submit">Save</button></div></div></form>`;
@@ -518,7 +521,7 @@ document.addEventListener('click',async e=>{
     draft.busy='Sending…';refreshSubmit();
     const adult=cur.role==='adult', who=draft.who;
     closeSheet();
-    if(await put('logs',{id:logId,choreId:c.id,title:c.title,value:+c.value||0,memberId:who,loggedBy:cur.id,date:today(),ts:Date.now(),photos:ids,status:adult?'approved':'pending'}))
+    if(await put('logs',{id:logId,choreId:c.id,title:c.title,value:payFor(c,who),memberId:who,loggedBy:cur.id,date:today(),ts:Date.now(),photos:ids,status:adult?'approved':'pending'}))
       toast(adult?'Marked done.':'Great job! Your photo was sent for a grown-up to check.');
   }
   else if(act==='undo'){await delLog(S.logs.find(x=>x.id===id))}
@@ -600,6 +603,7 @@ document.addEventListener('submit',async e=>{
     if(!m.name)return;
     if(old?.pinHash&&m.role!=='adult')m.pinHash=old.pinHash;
     if(m.role!=='adult'&&d.rcBonus!==undefined&&d.rcBonus!=='')m.rcBonus=Math.max(0,+d.rcBonus||0);else if(old?.rcBonus!=null)m.rcBonus=old.rcBonus;
+    if(m.role!=='adult'&&d.rate!==undefined&&d.rate!=='')m.rate=Math.max(0,+d.rate||0);
     if(m.role!=='adult'&&d.kidpin){if(!/^\d{4}$/.test(d.kidpin)){toast('Kid PINs are exactly 4 numbers.');return}m.pinHash=await kidHash(m.id,d.kidpin)}
     if(m.role==='adult'&&!S.settings.pinHash){if(!/^\d{4,8}$/.test(d.pin||''))return;const h=await hashPin(d.pin);await put('settings',Object.assign({},S.settings,{id:'main',pinHash:h,pinSalt:S.settings.pinSalt||FAM}));lsSet(PIN_OK,h)}
     closeSheet();
@@ -691,7 +695,7 @@ function dutyFor(mid){
 }
 const dutyToday=mid=>{const d=dutyFor(mid);return !!d&&isWeekday(today())&&today()>=d.start&&today()<=d.end};
 function dutyChore(mid){const b=S.chores.find(c=>c.id==='c-bathroom')||S.chores.find(c=>/bathroom/i.test(c.title||''));return {id:'duty-bath-'+mid,title:'Bathroom duty',value:0,items:b?b.items:[],standard:b?.standard||''}}
-const valTag=c=>String(c.id).startsWith('duty-bath')?'<span class="pill wait">Unpaid · consequence</span>':`<span class="val">${fmt(+c.value||0)}</span>`;
+const valTag=(c,who)=>String(c.id).startsWith('duty-bath')?'<span class="pill wait">Unpaid · consequence</span>':`<span class="val">${fmt(who?payFor(c,who):(+c.value||0))}</span>`;
 const planTalk=mid=>computeWeek(mid,weekKey(today())).total>=10&&computeWeek(mid,weekKey(addDays(today(),-7))).total>=10;
 const meterColor=t=>t>=15?'var(--bad)':t>=10?'var(--m5)':t>=5?'var(--wait)':'var(--ok)';
 const canSeeBedtime=k=>isKaz(k)&&(isAdult()||me()?.id===k.id);
