@@ -77,7 +77,7 @@ import { SEED_MEMBERS, SEED_CHORES } from './seed.js';
 
 const SDK='https://www.gstatic.com/firebasejs/10.12.2/';
 const COLS=['members','chores','logs','payouts'];
-const S={members:[],chores:[],logs:[],payouts:[],points:[],nights:[],bnotes:[],rcards:[],settings:{}};
+const S={members:[],chores:[],logs:[],payouts:[],points:[],nights:[],bnotes:[],rcards:[],excuses:[],settings:{}};
 const ME_KEY='chorebank-me', TAB_KEY='chorebank-tab', PIN_OK='chorebank-pin-ok';
 let F=null, fs=null, mode='loading', tab=lsGet(TAB_KEY)||'chores', filter=null, view='today', monthOff=0, draft=null, seeding=false, formPhoto=undefined;
 const photoCache=new Map();
@@ -189,14 +189,22 @@ function account(m,mk){
   const P=S.payouts.filter(p=>p.memberId===m.id&&p.month===mk);
   const paid=P.reduce((a,p)=>a+(+p.amount||0),0), base=+m.base||0;
   const RC=S.rcards.filter(r=>r.memberId===m.id&&r.status==='approved'&&String(r.decidedDate||r.date).startsWith(mk)),bonus=RC.reduce((a,r)=>a+(+r.amount||0),0);
-  return {L,ok,wait,earned,pending,P,paid,base,RC,bonus,owed:base+earned+bonus-paid};
+  const MS=m.role==='adult'?[]:missedInMonth(m.id,mk).filter(x=>!isExcused(x)),missed=MS.reduce((a,x)=>a+(+x.c.value||0),0);
+  const total=Math.max(0,base+earned+bonus-missed);
+  return {L,ok,wait,earned,pending,P,paid,base,RC,bonus,MS,missed,total,owed:total-paid};
 }
 const fbBox=(txt,kind,label)=>txt?`<div class="fb ${kind||''}"><b>${esc(label||'Note from a grown-up')}</b>${esc(txt)}</div>`:'';
 const earlierFix=l=>S.logs.filter(x=>x.choreId===l.choreId&&x.date===l.date&&x.memberId===l.memberId&&x.status==='redo'&&x.feedback&&(x.ts||0)<(l.ts||0)).sort((a,b)=>(b.ts||0)-(a.ts||0))[0];
 function jobsFor(mid,date){const dow=String(new Date(date+'T12:00').getDay());return jobsOn(dow).filter(j=>j.who===mid)}
 const doneLog=(cid,date)=>S.logs.some(l=>l.choreId===cid&&l.date===date&&(l.status==='approved'||l.status==='pending'));
-function missedList(mid,days=7){const out=[];for(let i=1;i<=days;i++){const d=addDays(today(),-i);jobsFor(mid,d).forEach(j=>{if(!doneLog(j.c.id,d))out.push({c:j.c,date:d,mid})})}return out}
 const missKey=m=>'miss-'+m.mid+'-'+m.c.id+'-'+m.date;
+// Missed-job deductions start counting on the day this rule began, so earlier days aren't charged.
+const MISS_START='2026-10-30';
+const choreStart=c=>{const d=c.createdAt?ymd(new Date(c.createdAt)):MISS_START;return d>MISS_START?d:MISS_START};
+const isExcused=m=>S.excuses.some(x=>x.missKey===missKey(m));
+function missedOn(mid,d){return jobsFor(mid,d).filter(j=>d>=choreStart(j.c)&&!doneLog(j.c.id,d)).map(j=>({c:j.c,date:d,mid}))}
+function missedList(mid,days=7){const out=[];for(let i=1;i<=days;i++)out.push(...missedOn(mid,addDays(today(),-i)));return out}
+function missedInMonth(mid,mk){const out=[];let d=mk+'-01';const end=addDays(today(),-1);while(d.startsWith(mk)&&d<=end){out.push(...missedOn(mid,d));d=addDays(d,1)}return out}
 const visibleChores=()=>isAdult()?[...S.chores]:S.chores.filter(c=>me()&&c.days&&Object.values(c.days).includes(me().id));
 const pendingLogs=()=>S.logs.filter(l=>l.status==='pending').sort((a,b)=>(a.ts||0)-(b.ts||0));
 function sections(c){const out=[];(c.items||[]).forEach(it=>{let g=out[out.length-1];if(!g||g.s!==it.s){g={s:it.s,items:[]};out.push(g)}g.items.push(it.t)});return out}
@@ -244,13 +252,14 @@ function renderChores(){
   js.sort((a,b)=>(member(a.who)?.name||'').localeCompare(member(b.who)?.name||'')||(a.c.title||'').localeCompare(b.c.title||''));
   if(!isAdult()&&me()){
     const left=js.filter(j=>!doneLog(j.c.id,t)).length;
-    if(left) h+=`<div class="card due" style="margin-top:8px"><b>⏰ ${left} job${left>1?'s':''} still to do today</b><div style="font-size:.9rem;margin-top:2px">Finish every step and send your photo <b>today</b>. Jobs that aren’t sent today don’t get paid.</div></div>`;
+    if(left) h+=`<div class="card due" style="margin-top:8px"><b>⏰ ${left} job${left>1?'s':''} still to do today</b><div style="font-size:.9rem;margin-top:2px">Finish every step and send your photo <b>today</b>. A job that isn’t sent today is taken <b>off</b> your allowance.</div></div>`;
     const ms=missedList(me().id);
-    if(ms.length) h+=`<div class="card" style="margin-top:8px"><b>Missed recently (not paid)</b><div class="sub" style="font-size:.88rem;margin-top:4px;display:grid;gap:2px">${ms.map(m=>`<span>✗ ${esc(m.c.title)} · ${esc(shortDate(m.date))}</span>`).join('')}</div></div>`;
+    const msx=ms.filter(m=>!isExcused(m));
+    if(msx.length) h+=`<div class="card" style="margin-top:8px"><b>Missed recently (taken off your allowance)</b><div class="sub" style="font-size:.88rem;margin-top:4px;display:grid;gap:2px">${msx.map(m=>`<span style="color:var(--bad)">✗ ${esc(m.c.title)} · ${esc(shortDate(m.date))} · −${fmt(+m.c.value||0)}</span>`).join('')}</div></div>`;
   }
   if(isAdult()){
     const all=kids().filter(x=>filter==='all'||filter===x.id).flatMap(x=>missedList(x.id));
-    if(all.length) h+=`<h3>Missed jobs (last 7 days, not paid)</h3><div class="list">`+all.sort((a,b)=>b.date.localeCompare(a.date)).map(m=>{const k=member(m.mid),done=S.points.some(e=>e.missKey===missKey(m));return `<div class="card chore">${avatar(k)}<div class="info"><div class="t">${esc(m.c.title)}</div><div class="sub"><span>${esc(k?.name||'')}</span><span>${esc(shortDate(m.date))}</span></div></div>${done?'<span class="pill pbad">Points added</span>':`<button class="btn sm ghost" data-act="missPts" data-key="${esc(missKey(m))}" data-mid="${m.mid}" data-cid="${m.c.id}" data-date="${m.date}">Add 2 points</button>`}</div>`}).join('')+`</div>`;
+    if(all.length) h+=`<h3>Missed jobs (last 7 days)</h3><div class="list">`+all.sort((a,b)=>b.date.localeCompare(a.date)).map(m=>{const k=member(m.mid),ex=isExcused(m);return `<div class="card chore">${avatar(k)}<div class="info"><div class="t">${esc(m.c.title)}</div><div class="sub"><span>${esc(k?.name||'')}</span><span>${esc(shortDate(m.date))}</span>${ex?'<span class="pill ok">Excused</span>':`<span class="pill pbad">−${fmt(+m.c.value||0)} from allowance</span>`}</div></div><button class="link" data-act="${ex?'unexcuse':'excuse'}" data-key="${esc(missKey(m))}" data-mid="${m.mid}" data-date="${m.date}">${ex?'Undo excuse':'Excuse'}</button></div>`}).join('')+`</div><p class="muted" style="font-size:.85rem;margin:6px 0 0">Missed jobs are taken off that month’s allowance automatically. Tap Excuse for a sick day or a good reason.</p>`;
   }
   if(!js.length) h+=`<div class="card empty" style="margin-top:8px"><p class="muted">No jobs for ${filter==='all'?'anyone':esc(member(filter)?.name||'this person')} today. Enjoy the day off!</p></div>`;
   else h+=`<div class="list" style="margin-top:8px">`+js.map(j=>jobCard(j.c,j.who,t)).join('')+`</div>`;
@@ -275,7 +284,7 @@ function renderWeek(){
       const js=jobsOn(String(dow)).filter(j=>j.who===k.id);
       return `<td>${js.map(j=>{const l=logFor(j.c.id,date);const cls=l&&l.status==='approved'?'ok':l&&l.status==='pending'?'wait':date<t?'miss':'';return `<span class="job ${cls}">${esc(j.c.short||j.c.title)}</span>`}).join('')||'<span class="muted">—</span>'}</td>`}).join('')+`</tr>`;
   });
-  h+=`</tbody></table></div><p class="muted" style="font-size:.85rem">★ approved · ◔ waiting for a grown-up · ✗ missed (not paid). Each kid gets the same number of jobs, and the jobs rotate so no one is stuck with the same one every day.</p>`;
+  h+=`</tbody></table></div><p class="muted" style="font-size:.85rem">★ approved · ◔ waiting for a grown-up · ✗ missed (taken off allowance). Each kid gets the same number of jobs, and the jobs rotate so no one is stuck with the same one every day.</p>`;
   h+=`<h3>What each job includes</h3><div class="list">`+visibleChores().sort((a,b)=>(a.title||'').localeCompare(b.title||'')).map(c=>`<button class="card chore" style="text-align:left;cursor:pointer" data-act="guide" data-id="${c.id}"><div class="info"><div class="t">${esc(c.title)}</div><div class="sub">${sections(c).map(g=>`<span>${esc(g.s)}</span>`).join('')}</div></div><span class="muted">›</span></button>`).join('')+`</div>`;
   return h;
 }
@@ -288,9 +297,9 @@ function renderMoney(){
   if(RCP.length) h+=`<h3>Report cards to check</h3><div class="list">`+RCP.map(r=>{const k=member(r.memberId);return `<div class="card acct"><div class="chore">${avatar(k)}<div class="info"><div class="t">${esc(k?.name||'')} · ${esc(r.period)}</div><div class="sub"><span>Sent ${esc(shortDate(r.date))}</span><span class="val">${fmt(rcAmount(k))} if all A’s and B’s</span></div></div></div>${(r.photos||[]).length?`<div class="photos">${r.photos.map(p=>`<button data-act="photo" data-id="${esc(p)}" aria-label="View report card larger"><img data-photo="${esc(p)}" alt="Report card photo"></button>`).join('')}</div>`:''}<div class="fb fix"><b>Check</b>Make sure it’s the REPORT CARD, not a progress report, and every grade is an A or B.</div><div class="actions"><button class="btn sm ghost" data-act="rcDecide" data-id="${r.id}" data-ok="0">Not this time</button><button class="btn sm ok" data-act="rcDecide" data-id="${r.id}" data-ok="1">All A’s & B’s: add ${fmt(rcAmount(k))}</button></div></div>`}).join('')+`</div>`;
   h+=`<div class="list" style="margin-top:12px">`+list.map(m=>{
     const A=account(m,mk);
-    const hist=[...A.L.map(l=>({d:l.date,t:l.title+(l.status==='pending'?' (waiting)':l.status==='redo'?' (sent back)':''),v:l.status==='redo'?0:+l.value||0})),...A.P.map(p=>({d:p.date,t:'Paid'+(p.note?' · '+p.note:''),v:-(+p.amount||0)})),...A.RC.map(r=>({d:r.decidedDate||r.date,t:'Report card bonus · '+r.period,v:+r.amount||0}))].sort((a,b)=>String(b.d).localeCompare(String(a.d)));
+    const hist=[...A.L.map(l=>({d:l.date,t:l.title+(l.status==='pending'?' (waiting)':l.status==='redo'?' (sent back)':''),v:l.status==='redo'?0:+l.value||0})),...A.P.map(p=>({d:p.date,t:'Paid'+(p.note?' · '+p.note:''),v:-(+p.amount||0)})),...A.RC.map(r=>({d:r.decidedDate||r.date,t:'Report card bonus · '+r.period,v:+r.amount||0})),...A.MS.map(x=>({d:x.date,t:'Missed: '+x.c.title,v:-(+x.c.value||0)}))].sort((a,b)=>String(b.d).localeCompare(String(a.d)));
     return `<div class="card acct"><div class="head">${avatar(m,40)}<div class="nm">${esc(m.name)}<div class="stars" aria-label="${A.ok.length} approved jobs">${A.ok.slice(0,40).map(()=>starSvg()).join('')}</div></div><div class="owed money">${fmt(A.owed)}<small>${A.owed>0?'still owed':A.owed<0?'paid ahead':'all paid'}</small></div></div>
-    <div class="ledger"><span>Monthly base</span><span class="r">${fmt(A.base)}</span><span>Jobs approved (${A.ok.length})</span><span class="r">+${fmt(A.earned)}</span>${A.pending?`<span class="muted">Waiting for OK (${A.wait.length})</span><span class="r muted">${fmt(A.pending)}</span>`:''}${A.bonus?`<span>Report card bonus</span><span class="r">+${fmt(A.bonus)}</span>`:''}<span>Paid out</span><span class="r">−${fmt(A.paid)}</span></div>
+    <div class="ledger"><span>Monthly base</span><span class="r">${fmt(A.base)}</span><span>Jobs approved (${A.ok.length})</span><span class="r">+${fmt(A.earned)}</span>${A.pending?`<span class="muted">Waiting for OK (${A.wait.length})</span><span class="r muted">${fmt(A.pending)}</span>`:''}${A.bonus?`<span>Report card bonus</span><span class="r">+${fmt(A.bonus)}</span>`:''}${A.missed?`<span style="color:var(--bad)">Missed jobs (${A.MS.length})</span><span class="r" style="color:var(--bad)">−${fmt(A.missed)}</span>`:''}<span>Paid out</span><span class="r">−${fmt(A.paid)}</span></div>
     ${m.role!=='adult'?rcBlock(m):''}
     ${hist.length?`<details><summary>See this month’s history</summary><ul>${hist.map(x=>`<li><span>${esc(String(x.d).slice(5).replace('-','/'))} · ${esc(x.t)}</span><span class="money">${x.v<0?fmt(x.v):'+'+fmt(x.v)}</span></li>`).join('')}</ul></details>`:''}
     ${isAdult()?`<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn sm ghost" data-act="pay" data-id="${m.id}" data-mk="${mk}">Record a payment</button>${m.role!=='adult'?`<button class="btn sm ghost" data-act="rcNew" data-id="${m.id}">Record a report card</button>`:''}</div>`:''}</div>`;
@@ -515,6 +524,8 @@ document.addEventListener('click',async e=>{
   else if(act==='undo'){await delLog(S.logs.find(x=>x.id===id))}
   else if(act==='rcSend'||act==='rcNew'){draft={rc:true,files:[]};openSheet(rcSheet(id,act==='rcNew'))}
   else if(act==='rcDecide'){const r=S.rcards.find(x=>x.id===id);if(r&&isAdult()){const ok=b.dataset.ok==='1',k=member(r.memberId);openSheet(`<h2>${ok?'Add report card bonus':'No bonus this time'}</h2><p class="muted" style="margin:0">${esc(k?.name||'')} · ${esc(r.period)}${ok?' · '+fmt(rcAmount(k)):''}</p><form id="fRcDecide" data-id="${r.id}" data-ok="${ok?1:0}" class="sheet" style="padding:0"><label for="rdFb">Note for ${esc(k?.name||'them')} (optional)<textarea id="rdFb" name="feedback" maxlength="300" style="min-height:80px" placeholder="${ok?'Example: So proud of you!':'Example: This was a progress report. Send the report card when it comes home.'}"></textarea></label><div class="actions"><div class="right"><button type="button" class="btn ghost" data-act="close">Cancel</button><button class="btn ${ok?'ok':''}" type="submit">${ok?'Add '+fmt(rcAmount(k)):'Save'}</button></div></div></form>`)}}
+  else if(act==='excuse'){if(!isAdult())return;b.disabled=true;if(await put('logs',{id:'ex-'+b.dataset.key,kind:'excuse',missKey:b.dataset.key,memberId:b.dataset.mid,date:b.dataset.date,ts:Date.now(),by:me()?.id||''}))toast('Excused. No money taken off.')}
+  else if(act==='unexcuse'){if(!isAdult())return;b.disabled=true;await del('logs','ex-'+b.dataset.key);toast('The missed job counts again.')}
   else if(act==='missPts'){
     if(!isAdult())return;const mid=b.dataset.mid,c=chore(b.dataset.cid),date=b.dataset.date,key=b.dataset.key,r=RULE_BY_ID['chores'];
     if(S.points.some(e=>e.missKey===key))return;
@@ -660,7 +671,7 @@ const addWeekdays=(ds,n)=>{let d=ds;while(n>0){d=addDays(d,1);if(isWeekday(d))n-
 const weekLabel=wk=>`${shortDate(wk)} – ${shortDate(addDays(wk,6))}`;
 const isKaz=m=>!!m&&(m.id==='m-kazlyn'||/^kazlyn/i.test(m.name||''));
 const kids=()=>S.members.filter(x=>x.role!=='adult');
-function splitLogs(all){S.logs=all.filter(x=>!x.kind);S.points=all.filter(x=>x.kind==='points');S.nights=all.filter(x=>x.kind==='night');S.bnotes=all.filter(x=>x.kind==='bnote');S.rcards=all.filter(x=>x.kind==='rcard')}
+function splitLogs(all){S.logs=all.filter(x=>!x.kind);S.points=all.filter(x=>x.kind==='points');S.nights=all.filter(x=>x.kind==='night');S.bnotes=all.filter(x=>x.kind==='bnote');S.rcards=all.filter(x=>x.kind==='rcard');S.excuses=all.filter(x=>x.kind==='excuse')}
 function computeWeek(mid,wk){
   const es=S.points.filter(e=>e.memberId===mid&&weekKey(e.date)===wk).sort((a,b)=>String(a.date).localeCompare(String(b.date))||(a.ts||0)-(b.ts||0));
   let total=0;const rows=[],hits=[];
